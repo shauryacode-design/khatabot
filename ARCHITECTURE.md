@@ -19,7 +19,8 @@ in phases, so future modules will be added here as their behavior is implemented
 - `khata_bot.models`: defines the SQLAlchemy `Shop` and `User` tables.
 - `khata_bot.database`: creates the SQLAlchemy engine and session factory and
   applies pending Alembic migrations; SQLite connections use WAL mode and enforce
-  foreign keys.
+  foreign keys. It recognizes the original Phase 1 tables and marks that schema
+  as migrated, preserving any existing shop and user rows.
 - `khata_bot.services.auth`: retrieves a registered user's shop membership.
 - `khata_bot.handlers.start`: handles `/start` and gives unauthorized users one
   short denial.

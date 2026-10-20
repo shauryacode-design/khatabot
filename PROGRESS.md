@@ -5,7 +5,8 @@
 - Phase 1: created the Python package, validated environment configuration,
   SQLite database setup, shop/user models, registered-user check, `/start`,
   Telegram request timeouts, a global error handler, and the initial Alembic
-  migration.
+  migration. Existing databases from the earlier `create_all` startup are
+  recognized and adopted by the initial migration without removing data.
 - Added initial tests, setup instructions, and a plain-language architecture
   overview.
 
