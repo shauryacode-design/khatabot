@@ -11,6 +11,9 @@ in phases, so future modules will be added here as their behavior is implemented
 3. When `/start` arrives, `khata_bot.handlers.start` checks the Telegram user ID.
 4. `khata_bot.services.auth` looks up that ID in the `users` table and loads its
    associated shop. The bot replies with the guide only for a registered user.
+5. Ordinary text messages use `khata_bot.handlers.text`, which checks the same
+   membership and gives authorized users a friendly Phase 1 status reply rather
+   than silently ignoring messages whose features are not implemented yet.
 
 ## Modules
 
@@ -24,6 +27,9 @@ in phases, so future modules will be added here as their behavior is implemented
 - `khata_bot.services.auth`: retrieves a registered user's shop membership.
 - `khata_bot.handlers.start`: handles `/start` and gives unauthorized users one
   short denial.
+- `khata_bot.handlers.text`: responds to ordinary text from authorized users to
+  explain that message features are not available yet; it never interprets or
+  saves message content.
 - `khata_bot.bot`: configures logging, Telegram timeouts, the error handler,
   command registration, and the `python -m khata_bot.bot` entry point.
 - `tests`: covers settings loading/validation and authorization lookup.

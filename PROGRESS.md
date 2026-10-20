@@ -7,6 +7,8 @@
   Telegram request timeouts, a global error handler, and the initial Alembic
   migration. Existing databases from the earlier `create_all` startup are
   recognized and adopted by the initial migration without removing data.
+- Ordinary text now receives a friendly Phase 1 status reply for registered
+  users; unknown users still receive only the authorization denial.
 - Added initial tests, setup instructions, and a plain-language architecture
   overview.
 

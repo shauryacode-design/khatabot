@@ -6,13 +6,20 @@ import re
 import httpx
 from telegram import Update
 from telegram.error import TelegramError
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 from sqlalchemy.orm import Session, sessionmaker
 
 from khata_bot.config import ConfigurationError, Settings, load_settings
 from khata_bot.database import create_session_factory
 from khata_bot.handlers.start import start_command
+from khata_bot.handlers.text import text_fallback
 
 logger = logging.getLogger(__name__)
 _TELEGRAM_TOKEN_PATTERN = re.compile(r"\b\d{5,}:[A-Za-z0-9_-]{20,}\b")
@@ -75,6 +82,12 @@ def build_application(
         session_factory or create_session_factory(settings)
     )
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(
+        MessageHandler(
+            filters.UpdateType.MESSAGE & filters.TEXT & ~filters.COMMAND,
+            text_fallback,
+        )
+    )
     application.add_error_handler(error_handler)
     return application
 

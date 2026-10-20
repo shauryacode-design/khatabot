@@ -39,6 +39,8 @@ Run the Phase 1 tests with `python -m pytest`.
 - Loads `.env` before process environment values and reports missing settings.
 - Creates the SQLite database with WAL and foreign-key enforcement enabled.
 - Checks shop membership before replying to `/start`.
+- Replies to ordinary messages with a Phase 1 status instead of silently
+  ignoring entry and ledger requests that are not implemented yet.
 - Uses long-polling request timeouts and registers a global error handler.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) and [PROGRESS.md](./PROGRESS.md).
