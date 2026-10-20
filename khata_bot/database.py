@@ -36,7 +36,6 @@ def create_session_factory(settings: Settings) -> sessionmaker:
     """Apply database migrations and create this bot's session factory."""
     engine = create_db_engine(settings.database_url)
     migration_config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
-    migration_config.set_main_option("sqlalchemy.url", settings.database_url)
     with engine.begin() as connection:
         migration_config.attributes["connection"] = connection
         command.upgrade(migration_config, "head")

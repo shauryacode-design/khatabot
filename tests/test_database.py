@@ -6,7 +6,7 @@ from khata_bot.database import create_session_factory
 
 
 def test_database_factory_applies_migrations(tmp_path) -> None:
-    database_path = tmp_path / "khata.db"
+    database_path = tmp_path / "khata%db.db"
     settings = Settings.model_validate(
         {
             "TELEGRAM_BOT_TOKEN": "test-token",
