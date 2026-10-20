@@ -1,0 +1,26 @@
+# Project progress
+
+## Done
+
+- Phase 1: created the Python package, validated environment configuration,
+  SQLite database setup, shop/user models, registered-user check, `/start`,
+  Telegram request timeouts, a global error handler, and the initial Alembic
+  migration.
+- Added initial tests, setup instructions, and a plain-language architecture
+  overview.
+
+## Next
+
+- Phase 2: rule-based entry parsing and persistent Save/Cancel confirmations.
+
+## Known limitations
+
+- No shop/user admin CLI exists yet, so a shop and an authorized user must be
+  inserted into the database manually before `/start` can be used.
+- Credentials are required to run the live bot, but none are required for tests.
+
+## Commands
+
+- Install dependencies: `python -m pip install -r requirements.txt`
+- Run tests: `python -m pytest`
+- Start the bot: `python -m khata_bot.bot`
