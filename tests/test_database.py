@@ -1,5 +1,6 @@
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
+from cryptography.fernet import Fernet
 
 from khata_bot.config import Settings
 from khata_bot.database import create_session_factory
@@ -13,8 +14,8 @@ def test_database_factory_applies_migrations(tmp_path) -> None:
             "TELEGRAM_BOT_TOKEN": "test-token",
             "ADMIN_TELEGRAM_ID": "123456",
             "GROQ_API_KEY": "test-groq-key",
-            "ENCRYPTION_KEY": "test-encryption-key",
-            "BACKUP_ENCRYPTION_KEY": "test-backup-key",
+            "ENCRYPTION_KEY": Fernet.generate_key().decode(),
+            "BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode(),
             "DATABASE_URL": f"sqlite:///{database_path.as_posix()}",
         }
     )
@@ -34,7 +35,8 @@ def test_database_factory_adopts_existing_phase_one_tables(tmp_path) -> None:
     database_path = tmp_path / "existing.db"
     database_url = f"sqlite:///{database_path.as_posix()}"
     old_engine = create_engine(database_url)
-    Base.metadata.create_all(old_engine)
+    for table_name in ("shops", "users"):
+        Base.metadata.tables[table_name].create(old_engine)
     with Session(old_engine) as session:
         shop = Shop(name="Existing Shop")
         session.add(shop)
@@ -55,8 +57,8 @@ def test_database_factory_adopts_existing_phase_one_tables(tmp_path) -> None:
             "TELEGRAM_BOT_TOKEN": "test-token",
             "ADMIN_TELEGRAM_ID": "123456",
             "GROQ_API_KEY": "test-groq-key",
-            "ENCRYPTION_KEY": "test-encryption-key",
-            "BACKUP_ENCRYPTION_KEY": "test-backup-key",
+            "ENCRYPTION_KEY": Fernet.generate_key().decode(),
+            "BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode(),
             "DATABASE_URL": database_url,
         }
     )
@@ -67,4 +69,4 @@ def test_database_factory_adopts_existing_phase_one_tables(tmp_path) -> None:
         assert session.query(User).one().telegram_user_id == 123456
     with sessions.kw["bind"].connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version"))
-        assert version.scalar_one() == "0001_initial"
+        assert version.scalar_one() == "0003_conversation_memory"

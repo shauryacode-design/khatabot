@@ -3,8 +3,9 @@
 import os
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 
 class ConfigurationError(ValueError):
@@ -21,6 +22,7 @@ class Settings(BaseModel):
     database_url: str = Field(
         default="sqlite:///khata.db", validation_alias="DATABASE_URL"
     )
+    backup_dir: str = Field(default="backups", validation_alias="BACKUP_DIR")
     encryption_key: str = Field(validation_alias="ENCRYPTION_KEY")
     backup_encryption_key: str = Field(validation_alias="BACKUP_ENCRYPTION_KEY")
     max_price_warning: int = Field(
@@ -29,6 +31,21 @@ class Settings(BaseModel):
     rate_limit_per_minute: int = Field(
         default=20, gt=0, validation_alias="RATE_LIMIT_PER_MINUTE"
     )
+
+    @field_validator("encryption_key", "backup_encryption_key")
+    @classmethod
+    def valid_fernet_key(cls, value: str) -> str:
+        try:
+            Fernet(value.encode("ascii"))
+        except (ValueError, UnicodeEncodeError) as error:
+            raise ValueError("must be a valid Fernet key") from error
+        return value
+
+    @model_validator(mode="after")
+    def encryption_keys_are_separate(self) -> "Settings":
+        if self.encryption_key == self.backup_encryption_key:
+            raise ValueError("ENCRYPTION_KEY and BACKUP_ENCRYPTION_KEY must differ")
+        return self
 
 
 _REQUIRED_ENV_VARS = (

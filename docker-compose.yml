@@ -1,0 +1,15 @@
+services:
+  khata-bot:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:////data/khata.db
+      BACKUP_DIR: /backups
+    volumes:
+      - khata-data:/data
+      - khata-backups:/backups
+    restart: always
+
+volumes:
+  khata-data:
+  khata-backups:

@@ -6,7 +6,7 @@ import sqlite3
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import sessionmaker
 
