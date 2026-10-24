@@ -14,6 +14,7 @@ START_GUIDE = (
     "Entry (total price): Aman chini 1kg 45\n"
     "Multiple items: Aman aata 10kg 400\nchini 2kg 100\n"
     "Payment: Aman ne 500 diye\n"
+    "Advance check: kisi ka advance payment?\n"
     "Purana balance: Aman pending balance 5000\n"
     "Hisab: /ledger Aman | /sabka_hisab | /today | /month\n"
     "Privacy: customer names, khata entries/payments, and Telegram account IDs "

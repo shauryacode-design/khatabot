@@ -47,6 +47,24 @@ def all_balances(session: Session, shop_id: int) -> list[tuple[Customer, int]]:
     )
 
 
+def advance_balances(session: Session, shop_id: int) -> list[tuple[Customer, int]]:
+    customers = session.scalars(
+        select(Customer).where(Customer.shop_id == shop_id)
+    ).all()
+    balances = [
+        (customer, customer_balance(session, shop_id, customer.id))
+        for customer in customers
+    ]
+    return sorted(
+        [(customer, balance) for customer, balance in balances if balance < 0],
+        key=lambda pair: (
+            pair[1],
+            pair[0].name.casefold(),
+            (pair[0].label or "").casefold(),
+        ),
+    )
+
+
 def ledger_rows(
     session: Session, shop_id: int, customer_id: int
 ) -> list[dict[str, Any]]:

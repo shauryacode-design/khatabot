@@ -16,7 +16,7 @@ Intent = Literal[
     "delete_ledger",
     "other",
 ]
-QueryType = Literal["customer_ledger", "all", "today", "month"]
+QueryType = Literal["customer_ledger", "all", "advances", "today", "month"]
 
 
 class ParsedItem(BaseModel):

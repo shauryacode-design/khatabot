@@ -23,7 +23,7 @@ Return only JSON with keys: intent, customer, date, items, amount, query_type, r
 intent is entry, payment, opening_balance, query, delete_ledger, or other.
 Each item has name, quantity (string or null), price (TOTAL rupees for that item, number or null).
 Never invent a customer, price, or payment amount. If a ledger write lacks customer or price, keep it as entry/payment with that field null.
-Use query_type customer_ledger, all, today, month, or null.
+Use query_type customer_ledger, all, advances, today, month, or null.
 Dates must be YYYY-MM-DD or null; convert aaj, kal, parso and local date phrases using the supplied current date.
 For ordinary greetings/chit-chat/help, intent=other and reply with one short warm Hinglish sentence.
 For ledger messages, reply may briefly clarify missing customer or price. Do not claim an entry was saved.

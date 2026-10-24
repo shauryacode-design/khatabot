@@ -91,6 +91,8 @@ def test_named_flexible_inputs(
         ("Aman jama 500", "payment", "Aman", 500),
         ("Aman paid ₹500", "payment", "Aman", 500),
         ("Aman ne 500 rupaye diye", "payment", "Aman", 500),
+        ("Shaurya ne 10000rs dediye", "payment", "Shaurya", 10000),
+        ("Shaurya ne 1000rs aur dediye", "payment", "Shaurya", 1000),
     ],
 )
 def test_rule_parser_payment_variants(
@@ -107,6 +109,8 @@ def test_rule_parser_payment_variants(
     [
         ("sabka hisab", "all", None),
         ("sabhi customers ka balance", "all", None),
+        ("kisi ka advance payment?", "advances", None),
+        ("ky kisi ka advance payment horkha h?", "advances", None),
         ("aaj ka hisab", "today", None),
         ("today entries", "today", None),
         ("Aman ka hisab", "customer_ledger", "Aman"),
@@ -143,6 +147,12 @@ def test_rule_parser_returns_friendly_conversation() -> None:
     assert parsed.intent == "other"
     assert parsed.reply
     assert "Hello sir" in parsed.reply
+
+
+def test_rule_parser_treats_identity_question_as_help_fallback() -> None:
+    parsed = parse_with_rules("Who are you?", TODAY)
+
+    assert parsed.intent == "other"
 
 
 def test_rule_parser_detects_customer_ledger_clear_request() -> None:

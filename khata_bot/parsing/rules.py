@@ -79,6 +79,18 @@ def parse_with_rules(
     value = message.translate(_DIGITS).strip()
     lowered = value.casefold()
     date_value = parse_date(value, today)
+    asks_about_advance = re.search(
+        r"\b(?:kisi|kisika|kis|who|anyone|any|kaun|kon|kya|ky|customer)\b",
+        lowered,
+    )
+    mentions_advance = re.search(
+        r"\b(?:advance|advances|peshgi)\b", lowered
+    )
+    if asks_about_advance and mentions_advance:
+        return ParsedMessage(
+            intent="query", query_type="advances", date=date_value
+        )
+
     if re.search(
         r"\b(?:pending\s+balance|opening\s+balance|old\s+balance)\b",
         value,
@@ -182,7 +194,9 @@ def parse_with_rules(
             rf"\d+(?:\.\d+)?\s*{_UNITS}\b", line_for_check, flags=re.I
         )
         is_payment = re.search(
-            r"\b(?:paid|pay|jama|diye|diya|payment)\b", line_for_check, flags=re.I
+            r"\b(?:paid|pay|jama|diye|diya|de\s*diye|de\s*diya|payment)\b",
+            line_for_check,
+            flags=re.I,
         )
         has_suspicious_amount_tail = re.search(
             r"(?:^|\s)-\s*\d[\d,]*(?:\.\d{1,2})?\s*$", line_for_check
@@ -298,7 +312,8 @@ def parse_with_rules(
     )
     if payment_match is None:
         payment_match = re.search(
-            rf"^\s*(.+?)(?:\s+ne)?\s+{_MONEY}\s+(?:paid|jama|diye|diya)\s*$",
+            rf"^\s*(.+?)(?:\s+ne)?\s+{_MONEY}\s+"
+            rf"(?:aur\s+)?(?:paid|jama|de\s*diye|de\s*diya|diye|diya)\s*$",
             value,
             flags=re.I,
         )

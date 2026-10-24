@@ -40,6 +40,7 @@ from khata_bot.services.ledger import (
     record_opening_balance,
     record_payment,
     utc_now,
+    advance_balances,
     void_customer_ledger,
     OPENING_BALANCE_ITEM,
 )
@@ -60,6 +61,7 @@ HELP_REPLY = (
     "• Udhaar: Aman chini 1kg 45 — rakam item ki total keemat hai, per-unit rate nahi.\n"
     "• Kai items: Aman aata 10kg 400\nchini 2kg 100 (neeche wali line par customer wahi rahega).\n"
     "• Payment: Aman ne 200 diye.\n"
+    "• Advance: kisi ka advance payment? / kisi customer ka advance balance?\n"
     "• Purana baki: Aman pending balance 5000.\n"
     "• Hisab: /ledger Aman, /all, /today, /month.\n"
     "• Statement: /statement Aman; PDF: /statementpdf Aman; CSV: /export.\n"
@@ -212,6 +214,21 @@ async def _send_all_balances(message, session, shop_id: int) -> None:
     await message.reply_text("\n".join(lines))
 
 
+async def _send_advance_balances(message, session, shop_id: int) -> None:
+    balances = advance_balances(session, shop_id)
+    if not balances:
+        await message.reply_text("Abhi kisi customer ka advance balance nahi hai.")
+        return
+    lines = ["Customers jinka advance balance hai:"]
+    for customer, balance in balances[:45]:
+        lines.append(
+            f"{customer_display_name(customer)}: {format_paise(abs(balance))} advance"
+        )
+    total = sum(abs(balance) for _, balance in balances)
+    lines.append(f"Total advance: {format_paise(total)}")
+    await message.reply_text("\n".join(lines))
+
+
 async def _send_period(
     message,
     session,
@@ -311,6 +328,9 @@ async def _reply_to_query(
         return
     if parsed.query_type == "all":
         await _send_all_balances(message, session, shop_id)
+        return
+    if parsed.query_type == "advances":
+        await _send_advance_balances(message, session, shop_id)
         return
     if parsed.query_type == "today":
         current = parsed.date or today_ist()
@@ -797,6 +817,11 @@ async def text_fallback(
         )
         if rule_parsed.intent == "delete_ledger":
             parsed, used_fallback = rule_parsed, True
+        elif rule_parsed.intent == "other" or (
+            rule_parsed.intent == "query"
+            and rule_parsed.query_type == "advances"
+        ):
+            parsed, used_fallback = rule_parsed, False
         elif rule_parsed.intent in {
             "opening_balance",
             "opening_balance_help",

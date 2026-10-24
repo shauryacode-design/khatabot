@@ -15,7 +15,15 @@ from khata_bot.handlers.text import (
     confirmation_callback,
     text_fallback,
 )
-from khata_bot.models import Base, Customer, Entry, PendingConfirmation, Shop, User
+from khata_bot.models import (
+    Base,
+    Customer,
+    Entry,
+    Payment,
+    PendingConfirmation,
+    Shop,
+    User,
+)
 from khata_bot.parsing.schemas import ParsedItem, ParsedMessage
 from khata_bot.services.conversation import remember_user_message, remember_customer
 
@@ -77,6 +85,74 @@ def test_text_fallback_replies_to_authorized_user(monkeypatch) -> None:
     asyncio.run(text_fallback(update, _context(session_factory)))
 
     message.reply_text.assert_awaited_once_with(HELP_REPLY)
+    engine.dispose()
+
+
+def test_identity_question_uses_fixed_help_reply_without_ai(monkeypatch) -> None:
+    engine, session_factory, _shop_id = _database()
+    parse_mock = AsyncMock()
+    monkeypatch.setattr("khata_bot.handlers.text.parse_message", parse_mock)
+    message = SimpleNamespace(text="Who are you?", reply_text=AsyncMock())
+    update = SimpleNamespace(
+        effective_message=message,
+        effective_user=SimpleNamespace(id=111),
+        update_id=101,
+    )
+
+    asyncio.run(text_fallback(update, _context(session_factory)))
+
+    message.reply_text.assert_awaited_once_with(HELP_REPLY)
+    parse_mock.assert_not_awaited()
+    engine.dispose()
+
+
+def test_advance_query_lists_only_customers_with_negative_balances(monkeypatch) -> None:
+    engine, session_factory, shop_id = _database()
+    with session_factory.begin() as session:
+        customer = Customer(
+            shop_id=shop_id, name="Shaurya", normalized_name="shaurya"
+        )
+        session.add(customer)
+        session.flush()
+        session.add_all(
+            [
+                Entry(
+                    shop_id=shop_id,
+                    customer_id=customer.id,
+                    entry_date=date(2026, 10, 24),
+                    item_name="aata",
+                    price_paise=40_000,
+                    created_by=111,
+                ),
+                Payment(
+                    shop_id=shop_id,
+                    customer_id=customer.id,
+                    payment_date=date(2026, 10, 24),
+                    amount_paise=41_000,
+                    created_by=111,
+                ),
+            ]
+        )
+    parse_mock = AsyncMock()
+    monkeypatch.setattr("khata_bot.handlers.text.parse_message", parse_mock)
+    message = SimpleNamespace(
+        text="ky kisi ka advance payment horkha h?",
+        reply_text=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_message=message,
+        effective_user=SimpleNamespace(id=111),
+        update_id=102,
+    )
+
+    asyncio.run(text_fallback(update, _context(session_factory)))
+
+    parse_mock.assert_not_awaited()
+    reply = message.reply_text.await_args.args[0]
+    assert "Shaurya: ₹10 advance" in reply
+    assert "Total advance: ₹10" in reply
+    assert "Aman" not in reply
+    assert "AI service available nahi thi" not in reply
     engine.dispose()
 
 
