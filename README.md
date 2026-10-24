@@ -58,6 +58,10 @@ requires a Save/Cancel tap before changing customer balances.
 - `Aman - chini 1kg 45, aata 10kg 400` — review the detected customer, date,
   items, quantities, and total; tap Save or Cancel.
 - `Aman ne 500 diye` — confirm a payment before it changes the balance.
+- `Shaurya pending balance 5000` — import existing customer balances; send
+  several customers as one per line. The bot previews the complete batch and
+  adds it only after you tap Save. Exact existing customer names are matched;
+  similar names must be corrected before import.
 - `Aman ka hisab`, `sabka hisab`, `aaj ka hisab` — view a customer ledger,
   outstanding balances, or today's entries.
 - `Shaurya aata 10kg 250, chinni 1kg 100` — multiple items on one entry.

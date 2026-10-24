@@ -4,7 +4,7 @@ import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from khata_bot.parsing.schemas import ParsedItem, ParsedMessage
+from khata_bot.parsing.schemas import ParsedItem, ParsedMessage, ParsedOpeningBalance
 from khata_bot.services.dates import parse_date
 
 _DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
@@ -79,6 +79,63 @@ def parse_with_rules(
     value = message.translate(_DIGITS).strip()
     lowered = value.casefold()
     date_value = parse_date(value, today)
+    if re.search(
+        r"\b(?:pending\s+balance|opening\s+balance|old\s+balance)\b",
+        value,
+        flags=re.I,
+    ):
+        opening_balances = []
+        malformed = False
+        for line in (line.strip() for line in value.splitlines() if line.strip()):
+            match = re.fullmatch(
+                rf"[\s\-•]*(?P<customer>.+?)\s+"
+                rf"(?:pending\s+balance|opening\s+balance|old\s+balance)\s*"
+                rf"(?:(?:is|:|=)\s*)?{_MONEY}\s*",
+                line,
+                flags=re.I,
+            )
+            if match is None:
+                malformed = True
+                break
+            customer = _clean_customer(match.group("customer"))
+            amount = _number(match.group(2))
+            if customer is None or amount is None or amount <= 0:
+                malformed = True
+                break
+            opening_balances.append(
+                ParsedOpeningBalance(customer=customer, amount=amount)
+            )
+        if opening_balances and not malformed:
+            if len(opening_balances) > 20:
+                return ParsedMessage(
+                    intent="opening_balance_help",
+                    reply="Ek baar mein adhiktam 20 opening balances bhejiye.",
+                )
+            return ParsedMessage(
+                intent="opening_balance",
+                date=date_value,
+                opening_balances=opening_balances,
+            )
+        if re.search(
+            r"\b(?:purane|old)\s+customers?\b", value, flags=re.I
+        ) and not re.search(r"\d", value):
+            return ParsedMessage(
+                intent="opening_balance_help",
+                reply=(
+                    "Haan, purane customers ka baki khata add kar sakte hain. "
+                    "Har customer ko alag line mein is format mein bhejiye:\n"
+                    "Shaurya pending balance 5000\n"
+                    "Akash pending balance 2000"
+                ),
+            )
+        return ParsedMessage(
+            intent="opening_balance_help",
+            reply=(
+                "Opening balance ke liye har customer ko alag line mein "
+                "'Naam pending balance rakam' format mein bhejiye. "
+                "Rakam rupees mein honi chahiye."
+            ),
+        )
     if re.search(
         r"\b(?:delete|remove|clear|hata(?:o)?|mit(?:a|ao)|saaf)\b",
         lowered,

@@ -17,8 +17,8 @@ entries and payments whenever a customer asks.
    Hinglish messages if the API is down or its response is invalid. Casual chat
    receives a conversational reply and is never treated as a saved entry.
 4. `khata_bot.handlers.text` routes greetings, customer requests, ledger entries,
-   payments, and balance questions. A write is saved as a pending confirmation,
-   not applied immediately.
+   payments, opening-balance imports, and balance questions. A write is saved as
+   a pending confirmation, not applied immediately.
 5. The confirmation's database row holds the payload. Telegram buttons contain
    only a short action and row ID. The callback atomically claims the pending
    record, checks its shop/user and 30-minute expiry, writes in a transaction,

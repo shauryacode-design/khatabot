@@ -151,6 +151,33 @@ def test_rule_parser_detects_customer_ledger_clear_request() -> None:
     assert parsed.customer == "Avinash"
 
 
+def test_rule_parser_reads_multiple_opening_balances() -> None:
+    parsed = parse_with_rules(
+        "Shaurya pending balance 5000\n"
+        "Akash pending balance ₹2,000\n"
+        "Avinash opening balance is 20000",
+        TODAY,
+    )
+
+    assert parsed.intent == "opening_balance"
+    assert [
+        (item.customer, item.amount) for item in parsed.opening_balances
+    ] == [
+        ("Shaurya", 5000),
+        ("Akash", 2000),
+        ("Avinash", 20000),
+    ]
+
+
+def test_rule_parser_explains_opening_balance_format() -> None:
+    parsed = parse_with_rules(
+        "mere pass purane customers ka khata hai, pending balance bataunga"
+    )
+
+    assert parsed.intent == "opening_balance_help"
+    assert "Shaurya pending balance 5000" in parsed.reply
+
+
 def test_rule_parser_understands_multiline_price_before_item_with_memory() -> None:
     parsed = parse_with_rules(
         "chawal 300\ndaal 200",

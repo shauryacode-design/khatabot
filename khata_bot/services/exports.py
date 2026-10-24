@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from khata_bot.models import Customer, Entry, Payment
+from khata_bot.services.ledger import OPENING_BALANCE_ITEM
 from khata_bot.services.phones import decrypt_phone
 
 
@@ -62,7 +63,11 @@ def export_shop_csv(
             [
                 customers.get(entry.customer_id, ""),
                 phones.get(entry.customer_id, ""),
-                "entry",
+                (
+                    "opening_balance"
+                    if entry.item_name == OPENING_BALANCE_ITEM
+                    else "entry"
+                ),
                 entry.entry_date.isoformat(),
                 entry.item_name,
                 entry.quantity_text or "",

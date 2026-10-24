@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from khata_bot.models import AuditLog, Customer, Entry, Payment
 
+OPENING_BALANCE_ITEM = "Opening balance"
+
 
 def customer_balance(session: Session, shop_id: int, customer_id: int) -> int:
     entry_total = session.scalar(
@@ -120,6 +122,25 @@ def record_entry(
         )
     session.flush()
     return customer_balance(session, shop_id, customer_id)
+
+
+def record_opening_balance(
+    session: Session,
+    shop_id: int,
+    customer_id: int,
+    entry_date: date,
+    amount_paise: int,
+    created_by: int,
+) -> int:
+    """Record an imported starting debt as a distinct, auditable ledger row."""
+    return record_entry(
+        session,
+        shop_id,
+        customer_id,
+        entry_date,
+        [{"name": OPENING_BALANCE_ITEM, "price_paise": amount_paise}],
+        created_by,
+    )
 
 
 def record_payment(

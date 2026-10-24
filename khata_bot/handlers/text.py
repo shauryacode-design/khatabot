@@ -32,9 +32,11 @@ from khata_bot.services.ledger import (
     customer_balance,
     ledger_rows,
     record_entry,
+    record_opening_balance,
     record_payment,
     utc_now_naive,
     void_customer_ledger,
+    OPENING_BALANCE_ITEM,
 )
 from khata_bot.services.conversation import (
     clear_conversation_memory,
@@ -80,6 +82,18 @@ def _format_date(value: date) -> str:
 
 def _confirmation_text(payload: dict) -> str:
     date_value = date.fromisoformat(payload["date"])
+    if payload["kind"] == "opening_balances":
+        lines = [f"Purane khate ka initial baki | {_format_date(date_value)}"]
+        total = 0
+        for item in payload["balances"]:
+            lines.append(
+                f"{item['customer_name']}: {format_paise(item['amount_paise'])}"
+            )
+            total += item["amount_paise"]
+        lines.extend(
+            [f"Total opening balance {format_paise(total)}", "Sabhi balances save karein?"]
+        )
+        return "\n".join(lines)
     title = payload["customer_name"]
     lines = [f"{title} | {_format_date(date_value)}"]
     if payload["kind"] == "payment":
@@ -203,9 +217,17 @@ async def _send_period(
         return
     lines = [heading]
     total_entries = 0
+    total_opening_balances = 0
     total_payments = 0
     merged = [
-        (entry.entry_date, entry.id, "entry", customer.name, entry.price_paise, entry.item_name)
+        (
+            entry.entry_date,
+            entry.id,
+            "opening_balance" if entry.item_name == OPENING_BALANCE_ITEM else "entry",
+            customer.name,
+            entry.price_paise,
+            entry.item_name,
+        )
         for entry, customer in entries
     ]
     merged.extend(
@@ -216,14 +238,24 @@ async def _send_period(
         if kind == "entry":
             total_entries += amount
             lines.append(f"{_format_date(event_date)} {customer_name}: {description} {format_paise(amount)}")
+        elif kind == "opening_balance":
+            total_opening_balances += amount
+            lines.append(
+                f"{_format_date(event_date)} {customer_name}: opening balance "
+                f"{format_paise(amount)}"
+            )
         else:
             total_payments += amount
             lines.append(f"{_format_date(event_date)} {customer_name}: payment {format_paise(amount)}")
+    lines.append(f"Goods total: {format_paise(total_entries)}")
+    if total_opening_balances:
+        lines.append(
+            f"Opening balances total: {format_paise(total_opening_balances)}"
+        )
     lines.extend(
         [
-            f"Goods total: {format_paise(total_entries)}",
             f"Payments total: {format_paise(total_payments)}",
-            f"Net change: {format_paise(total_entries - total_payments)}",
+            f"Net change: {format_paise(total_entries + total_opening_balances - total_payments)}",
         ]
     )
     await message.reply_text("\n".join(lines[:50]))
@@ -375,6 +407,77 @@ async def _create_write_confirmation(
         preview = _confirmation_text(payload)
         if warning:
             preview += "\n⚠️ Rakam zyada hai. Kripya dobara check karein."
+        await message.reply_text(
+            preview, reply_markup=_save_keyboard(confirmation.id)
+        )
+
+
+async def _create_opening_balances_confirmation(
+    message,
+    context: ContextTypes.DEFAULT_TYPE,
+    membership: tuple[int, int, int],
+    parsed: ParsedMessage,
+) -> None:
+    local_user_id, shop_id, _telegram_user_id = membership
+    if not parsed.opening_balances:
+        await message.reply_text(
+            "Customer aur pending balance dono bhejiye; har customer alag line mein."
+        )
+        return
+
+    balances = []
+    seen_names = set()
+    for item in parsed.opening_balances:
+        normalized = normalize_name(item.customer)
+        if normalized in seen_names:
+            await message.reply_text(
+                f"{item.customer} ka naam list mein do baar hai. Har customer ek hi baar bhejiye."
+            )
+            return
+        seen_names.add(normalized)
+        balances.append(
+            {
+                "customer_name": item.customer,
+                "amount_paise": rupees_to_paise(item.amount),
+            }
+        )
+
+    session_factory = context.application.bot_data["session_factory"]
+    with session_factory.begin() as session:
+        for item in balances:
+            matches = customer_matches(session, shop_id, item["customer_name"])
+            exact = [
+                candidate
+                for candidate in matches
+                if candidate.normalized_name == normalize_name(item["customer_name"])
+            ]
+            if exact:
+                item["customer_id"] = exact[0].id
+                item["customer_name"] = exact[0].name
+            elif matches:
+                await message.reply_text(
+                    f"'{item['customer_name']}' ka milta-julta customer "
+                    f"'{matches[0].name}' hai. Galat khate mein balance na jaye, "
+                    "isliye exact customer name se dobara bhejiye."
+                )
+                return
+
+        confirmation = create_confirmation(
+            session,
+            shop_id,
+            local_user_id,
+            "opening_balances",
+            {
+                "kind": "opening_balances",
+                "date": today_ist().isoformat(),
+                "balances": balances,
+            },
+        )
+        preview = _confirmation_text(confirmation.payload)
+        if sum(item["amount_paise"] for item in balances) > (
+            context.application.bot_data["settings"].max_price_warning * 100
+        ):
+            preview += "\n⚠️ Total rakam zyada hai. Kripya dobara check karein."
         await message.reply_text(
             preview, reply_markup=_save_keyboard(confirmation.id)
         )
@@ -566,6 +669,8 @@ async def text_fallback(
         )
         if rule_parsed.intent == "delete_ledger":
             parsed, used_fallback = rule_parsed, True
+        elif rule_parsed.intent in {"opening_balance", "opening_balance_help"}:
+            parsed, used_fallback = rule_parsed, False
         else:
             parsed, used_fallback = await parse_message(
                 message.text,
@@ -585,6 +690,12 @@ async def text_fallback(
     if parsed.intent == "delete_ledger":
         await _start_clear_customer_ledger(
             message, context, membership, parsed.customer
+        )
+        return
+    if parsed.intent == "opening_balance_help":
+        await message.reply_text(
+            parsed.reply
+            or "Har customer ka naam aur pending balance alag line mein bhejiye."
         )
         return
     if parsed.intent == "other":
@@ -617,6 +728,11 @@ async def text_fallback(
         return
 
     try:
+        if parsed.intent == "opening_balance":
+            await _create_opening_balances_confirmation(
+                message, context, membership, parsed
+            )
+            return
         await _create_write_confirmation(message, context, membership, parsed)
     except (ValueError, SQLAlchemyError) as error:
         logger.error(
@@ -804,16 +920,15 @@ async def confirmation_callback(
                     "edit_menu",
                     {"entry_id": entry.id},
                 )
+                editable_fields = [("Price", "price"), ("Date", "date")]
+                if entry.item_name != OPENING_BALANCE_ITEM:
+                    editable_fields.insert(1, ("Item", "item"))
                 buttons = [
                     InlineKeyboardButton(
                         label,
                         callback_data=f"field:{confirmation.id}:{field}",
                     )
-                    for label, field in (
-                        ("Price", "price"),
-                        ("Item", "item"),
-                        ("Date", "date"),
-                    )
+                    for label, field in editable_fields
                 ]
                 buttons.append(
                     InlineKeyboardButton(
@@ -844,6 +959,24 @@ async def confirmation_callback(
                 if confirmation is None or confirmation.kind != "edit_menu":
                     await query.edit_message_text("Yeh edit request ab active nahi hai.")
                     return
+                if parts[2] == "item":
+                    entry = session.scalar(
+                        select(Entry).where(
+                            Entry.id == confirmation.payload["entry_id"],
+                            Entry.shop_id == shop_id,
+                            Entry.voided_at.is_(None),
+                        )
+                    )
+                    if entry is None:
+                        await query.edit_message_text(
+                            "Yeh entry nahi mili ya pehle hi void hai."
+                        )
+                        return
+                    if entry.item_name == OPENING_BALANCE_ITEM:
+                        await query.edit_message_text(
+                            "Opening balance ka type badla nahi ja sakta."
+                        )
+                        return
                 confirmation.kind = "edit_value"
                 confirmation.status = "awaiting_input"
                 confirmation.payload["field"] = parts[2]
@@ -1081,6 +1214,93 @@ async def confirmation_callback(
                     f"{entries_voided} entries aur {payments_voided} payments "
                     "audit ke liye rakhe gaye hain."
                 )
+        elif confirmation.kind == "opening_balances":
+            payload = confirmation.payload
+            resolved = []
+            conflict = None
+            for item in payload["balances"]:
+                if item.get("customer_id"):
+                    customer = session.scalar(
+                        select(Customer).where(
+                            Customer.id == item["customer_id"],
+                            Customer.shop_id == shop_id,
+                        )
+                    )
+                    if customer is None:
+                        conflict = (
+                            f"Customer '{item['customer_name']}' ab nahi mila. "
+                            "Koi balance save nahi hua."
+                        )
+                        break
+                else:
+                    matches = customer_matches(
+                        session, shop_id, item["customer_name"]
+                    )
+                    exact = [
+                        candidate
+                        for candidate in matches
+                        if candidate.normalized_name
+                        == normalize_name(item["customer_name"])
+                    ]
+                    if exact:
+                        customer = exact[0]
+                    elif matches:
+                        conflict = (
+                            f"'{item['customer_name']}' ka milta-julta customer "
+                            f"'{matches[0].name}' ab khate mein hai. Koi balance "
+                            "save nahi hua; exact naam se dobara bhejiye."
+                        )
+                        break
+                    else:
+                        customer = None
+                resolved.append((item, customer))
+
+            if conflict:
+                confirmation.status = "cancelled"
+                result_text = conflict
+            else:
+                saved = []
+                for item, customer in resolved:
+                    if customer is None:
+                        customer = Customer(
+                            shop_id=shop_id,
+                            name=item["customer_name"],
+                            normalized_name=normalize_name(item["customer_name"]),
+                        )
+                        session.add(customer)
+                        session.flush()
+                    balance = record_opening_balance(
+                        session,
+                        shop_id,
+                        customer.id,
+                        date.fromisoformat(payload["date"]),
+                        item["amount_paise"],
+                        telegram_user_id,
+                    )
+                    saved.append(
+                        {
+                            "customer_name": customer.name,
+                            "customer_id": customer.id,
+                            "amount_paise": item["amount_paise"],
+                            "balance_paise": balance,
+                        }
+                    )
+                confirmation.status = "done"
+                audit(
+                    session,
+                    shop_id,
+                    telegram_user_id,
+                    "opening_balances_imported",
+                    {"balances": saved},
+                )
+                total = sum(item["amount_paise"] for item in saved)
+                result_lines = ["✅ Initial balances saved:"]
+                result_lines.extend(
+                    f"{item['customer_name']}: {format_paise(item['balance_paise'])}"
+                    for item in saved
+                )
+                result_lines.append(f"Total added: {format_paise(total)}")
+                result_text = "\n".join(result_lines)
         else:
             payload = confirmation.payload
             customer = None

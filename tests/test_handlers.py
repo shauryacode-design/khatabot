@@ -286,3 +286,94 @@ def test_entry_requires_confirmation_and_callback_is_idempotent(monkeypatch) -> 
         assert session.scalar(select(Customer).where(Customer.shop_id == shop_id))
     assert callback_query.edit_message_text.await_count == 2
     engine.dispose()
+
+
+def test_opening_balances_import_as_one_confirmed_batch() -> None:
+    engine, session_factory, shop_id = _database()
+    message = SimpleNamespace(
+        text=(
+            "Aman pending balance 5000\n"
+            "Akash pending balance 2000\n"
+            "Avinash pending balance 20000"
+        ),
+        reply_text=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_message=message,
+        effective_user=SimpleNamespace(id=111),
+        update_id=30,
+    )
+    context = _context(session_factory)
+    asyncio.run(text_fallback(update, context))
+
+    preview = message.reply_text.await_args.args[0]
+    assert "Aman: ₹5,000" in preview
+    assert "Akash: ₹2,000" in preview
+    assert "Avinash: ₹20,000" in preview
+    assert message.reply_text.await_args.kwargs["reply_markup"] is not None
+    with session_factory() as session:
+        confirmation = session.scalar(select(PendingConfirmation))
+        assert confirmation is not None
+        assert confirmation.kind == "opening_balances"
+        assert session.scalar(select(func.count(Entry.id))) == 0
+        confirmation_id = confirmation.id
+
+    callback_query = SimpleNamespace(
+        data=f"save:{confirmation_id}",
+        message=SimpleNamespace(),
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    callback_update = SimpleNamespace(
+        callback_query=callback_query,
+        effective_user=SimpleNamespace(id=111),
+        update_id=31,
+    )
+    asyncio.run(confirmation_callback(callback_update, context))
+
+    callback_query.edit_message_text.assert_awaited_once()
+    assert "Initial balances saved" in callback_query.edit_message_text.await_args.args[0]
+    with session_factory() as session:
+        entries = session.scalars(
+            select(Entry).where(Entry.shop_id == shop_id)
+        ).all()
+        assert len(entries) == 3
+        assert {entry.item_name for entry in entries} == {"Opening balance"}
+        balances = {
+            customer.name: sum(
+                entry.price_paise
+                for entry in entries
+                if entry.customer_id == customer.id
+            )
+            for customer in session.scalars(
+                select(Customer).where(Customer.shop_id == shop_id)
+            ).all()
+        }
+        assert balances == {
+            "Aman": 500_000,
+            "Akash": 200_000,
+            "Avinash": 2_000_000,
+        }
+        assert session.scalar(select(PendingConfirmation.status)) == "done"
+    engine.dispose()
+
+
+def test_opening_balance_import_rejects_fuzzy_customer_match() -> None:
+    engine, session_factory, _shop_id = _database()
+    message = SimpleNamespace(
+        text="Amaan pending balance 500",
+        reply_text=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_message=message,
+        effective_user=SimpleNamespace(id=111),
+        update_id=32,
+    )
+    asyncio.run(text_fallback(update, _context(session_factory)))
+
+    message.reply_text.assert_awaited_once()
+    assert "milta-julta customer" in message.reply_text.await_args.args[0]
+    with session_factory() as session:
+        assert session.scalar(select(PendingConfirmation)) is None
+        assert session.scalar(select(func.count(Entry.id))) == 0
+    engine.dispose()
