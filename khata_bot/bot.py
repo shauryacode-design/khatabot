@@ -234,7 +234,6 @@ def main() -> None:
 
     application = build_application(settings)
     start_health_server()
-    app.run_polling()
     application.run_polling()
 
 
