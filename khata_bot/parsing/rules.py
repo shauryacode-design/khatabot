@@ -159,6 +159,85 @@ def parse_with_rules(
     if re.search(r"\b(?:month|mahina|monthly)\b.*\b(?:hisab|report)\b", lowered):
         return ParsedMessage(intent="query", query_type="month", date=date_value)
 
+    # Catch malformed monetary tails before the permissive name-query fallback.
+    for line in (part.strip() for part in value.splitlines() if part.strip()):
+        line_for_check = re.sub(
+            r"\b(?:aaj|kal|parso|today|tomorrow|day after tomorrow)\b(?:\s+ka)?",
+            " ",
+            line,
+            flags=re.I,
+        )
+        line_for_check = re.sub(
+            r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", " ", line_for_check
+        )
+        line_for_check = re.sub(
+            r"\b\d{1,2}\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|"
+            r"may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|"
+            r"oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+20\d{2})?\b",
+            " ",
+            line_for_check,
+            flags=re.I,
+        )
+        has_quantity = re.search(
+            rf"\d+(?:\.\d+)?\s*{_UNITS}\b", line_for_check, flags=re.I
+        )
+        is_payment = re.search(
+            r"\b(?:paid|pay|jama|diye|diya|payment)\b", line_for_check, flags=re.I
+        )
+        has_suspicious_amount_tail = re.search(
+            r"(?:^|\s)-\s*\d[\d,]*(?:\.\d{1,2})?\s*$", line_for_check
+        ) or re.search(r"(?:^|\s)\d+[A-Za-z]+\s*$", line_for_check)
+        likely_entry = len(line_for_check.split()) >= 3 and (
+            re.search(r"(?:^|\s)\d[\d,]*(?:\.\d{1,2})?\s*$", line_for_check)
+            or has_suspicious_amount_tail
+        )
+        if has_quantity or is_payment or likely_entry:
+            if re.search(
+                r"(?:^|\s)-\s*\d[\d,]*(?:\.\d{1,2})?(?:\s*(?:rs\.?|rupees?|rupaye?))?\s*$",
+                line_for_check,
+                flags=re.I,
+            ):
+                return ParsedMessage(
+                    intent="invalid_input",
+                    reply="Rakam negative nahi ho sakti. Sahi positive rakam ke saath dobara bhejiye.",
+                )
+            if (has_quantity or is_payment or likely_entry) and re.search(
+                r"(?:^|\s)0+(?:\.0{1,2})?(?:\s*(?:rs\.?|rupees?|rupaye?))?\s*$",
+                line_for_check,
+                flags=re.I,
+            ):
+                return ParsedMessage(
+                    intent="invalid_input",
+                    reply="Rakam zero nahi ho sakti. Sahi positive rakam ke saath dobara bhejiye.",
+                )
+            if (has_quantity or likely_entry) and re.search(
+                r"(?:^|\s)\d+[A-Za-z]+\s*$", line_for_check
+            ) and not re.search(
+                r"(?:rs\.?|rupees?|rupaye?)\s*$", line_for_check, flags=re.I
+            ):
+                return ParsedMessage(
+                    intent="invalid_input",
+                    reply="Rakam samajh nahi aayi. Har item ki total keemat rupees mein likhiye, jaise: Aman chini 1kg 45.",
+                )
+            if has_quantity and not re.search(
+                _MONEY + r"\s*$", line_for_check, flags=re.I
+            ):
+                return ParsedMessage(
+                    intent="invalid_input",
+                    reply="Item ki total keemat chhoot gayi hai. Har item ke baad total rakam rupees mein likhiye.",
+                )
+            payment_amount = is_payment and re.search(
+                rf"(?:\b(?:paid|pay|jama|diye|diya|payment)\s+|\bne\s+)"
+                rf"{_MONEY}(?![\w.,])",
+                line_for_check,
+                flags=re.I,
+            )
+            if is_payment and not payment_amount:
+                return ParsedMessage(
+                    intent="invalid_input",
+                    reply="Payment ki rakam samajh nahi aayi. Positive amount likhiye, jaise: Aman ne 200 diye.",
+                )
+
     value = re.sub(
         r"\b(?:aaj|kal|parso|today|tomorrow|day after tomorrow)\b(?:\s+ka)?",
         " ",

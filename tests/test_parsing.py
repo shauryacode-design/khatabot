@@ -127,7 +127,8 @@ def test_rule_parser_query_variants(
     "text,expected",
     [
         ("aaj", date(2026, 10, 20)),
-        ("kal", date(2026, 10, 21)),
+        ("kal", date(2026, 10, 19)),
+        ("tomorrow", date(2026, 10, 21)),
         ("parso", date(2026, 10, 22)),
         ("12 oct", date(2026, 10, 12)),
         ("12/10", date(2026, 10, 12)),
@@ -190,6 +191,37 @@ def test_rule_parser_understands_multiline_price_before_item_with_memory() -> No
     assert [(item.name, item.price) for item in parsed.items] == [
         ("chawal", 300),
         ("daal", 200),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Aman chini 1kg -45",
+        "Aman chini 1kg 0",
+        "Aman chini 1kg 10pct",
+        "Aman chini 1kg",
+        "Aman chini -45",
+        "Aman chini 0",
+        "Aman chini 10pct",
+        "Aman paid -200",
+        "Aman paid 0",
+        "Aman paid 10pct",
+        "Aman paid",
+    ],
+)
+def test_rule_parser_rejects_invalid_money(text: str) -> None:
+    assert parse_with_rules(text, TODAY).intent == "invalid_input"
+
+
+def test_rule_parser_accepts_multiline_items_with_inherited_customer() -> None:
+    parsed = parse_with_rules("Aman aata 10kg 400\nchini 2kg 100", TODAY)
+
+    assert parsed.intent == "entry"
+    assert parsed.customer == "Aman"
+    assert [(item.name, item.price) for item in parsed.items] == [
+        ("aata", 400),
+        ("chini", 100),
     ]
 
 

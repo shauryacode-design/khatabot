@@ -74,7 +74,7 @@ def test_database_factory_adopts_existing_phase_one_tables(tmp_path) -> None:
         assert session.query(User).one().telegram_user_id == 123456
     with sessions.kw["bind"].connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version"))
-        assert version.scalar_one() == "9f3c2d1a7b64"
+        assert version.scalar_one() == "4e7b8a1c2d90"
 
 
 def test_telegram_id_columns_migrate_up_and_down(tmp_path) -> None:
@@ -166,5 +166,65 @@ def test_telegram_id_migration_refuses_unsafe_downgrade(tmp_path) -> None:
         version = connection.execute(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
-    assert version == "9f3c2d1a7b64"
+    assert version == "4e7b8a1c2d90"
+    engine.dispose()
+
+
+def test_customer_label_migration_preserves_ledger_and_guards_downgrade(
+    tmp_path,
+) -> None:
+    database_url = f"sqlite:///{(tmp_path / 'customer-label.db').as_posix()}"
+    settings = Settings.model_validate(
+        {
+            "TELEGRAM_BOT_TOKEN": "test-token",
+            "ADMIN_TELEGRAM_ID": "123456",
+            "GROQ_API_KEY": "test-groq-key",
+            "ENCRYPTION_KEY": Fernet.generate_key().decode(),
+            "BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+            "DATABASE_URL": database_url,
+        }
+    )
+    sessions = create_session_factory(settings)
+    engine = sessions.kw["bind"]
+    with sessions.begin() as session:
+        shop = Shop(name="Label migration")
+        session.add(shop)
+        session.flush()
+        customer = Customer(
+            shop_id=shop.id, name="Aman", normalized_name="aman"
+        )
+        session.add(customer)
+        session.flush()
+        session.add(
+            Entry(
+                shop_id=shop.id,
+                customer_id=customer.id,
+                entry_date=date(2026, 10, 20),
+                item_name="chini",
+                price_paise=4_500,
+                created_by=5_726_633_609,
+            )
+        )
+
+    migration_config = Config("alembic.ini")
+    with engine.begin() as connection:
+        migration_config.attributes["connection"] = connection
+        command.downgrade(migration_config, "2ca71e8b43d0")
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM entries")).scalar_one() == 1
+    with engine.begin() as connection:
+        migration_config.attributes["connection"] = connection
+        command.upgrade(migration_config, "head")
+
+    with sessions.begin() as session:
+        session.query(Customer).one().label = "Main market"
+    with pytest.raises(RuntimeError, match="labeled customers exist"):
+        with engine.begin() as connection:
+            migration_config.attributes["connection"] = connection
+            command.downgrade(migration_config, "2ca71e8b43d0")
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM entries")).scalar_one() == 1
+        assert connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "4e7b8a1c2d90"
     engine.dispose()

@@ -11,6 +11,7 @@ Intent = Literal[
     "payment",
     "opening_balance",
     "opening_balance_help",
+    "invalid_input",
     "query",
     "delete_ledger",
     "other",

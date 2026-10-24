@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from khata_bot.config import Settings
 from khata_bot.handlers.text import (
+    HELP_REPLY,
     _reply_to_query,
     confirmation_callback,
     text_fallback,
@@ -75,7 +76,7 @@ def test_text_fallback_replies_to_authorized_user(monkeypatch) -> None:
     )
     asyncio.run(text_fallback(update, _context(session_factory)))
 
-    message.reply_text.assert_awaited_once_with("Hello sir! Kaise madad karun?")
+    message.reply_text.assert_awaited_once_with(HELP_REPLY)
     engine.dispose()
 
 

@@ -56,29 +56,41 @@ requires a Save/Cancel tap before changing customer balances.
 
 - `Hello` — a friendly reply with khata guidance.
 - `Aman - chini 1kg 45, aata 10kg 400` — review the detected customer, date,
-  items, quantities, and total; tap Save or Cancel.
+  items, quantities, and total; each final number is that item's total price,
+  not a per-unit rate. Tap Save or Cancel.
+- `Aman aata 10kg 400` followed by `chini 2kg 100` on the next line — the
+  second line inherits the customer name. The bot shows each saved line and
+  its running balance.
 - `Aman ne 500 diye` — confirm a payment before it changes the balance.
+- `Aman chini 1kg -45`, `0`, or an unreadable price such as `10pct` is rejected;
+  no amount is guessed or saved.
 - `Shaurya pending balance 5000` — import existing customer balances; send
   several customers as one per line. The bot previews the complete batch and
   adds it only after you tap Save. Exact existing customer names are matched;
   similar names must be corrected before import.
 - `Aman ka hisab`, `sabka hisab`, `aaj ka hisab` — view a customer ledger,
-  outstanding balances, or today's entries.
+  outstanding balances sorted by amount owed, or today's entries.
 - `Shaurya aata 10kg 250, chinni 1kg 100` — multiple items on one entry.
 - `add new customer Shaurya` or `/customer Shaurya` — confirm adding a customer.
 
 Natural-language parsing uses Groq as the primary interpreter and a conservative
 rule parser if Groq is unavailable. An unavailable AI model falls back to rules
 and asks the owner to verify parsed fields before saving. Never accept a guessed
-price or customer name; provide the missing detail instead.
+price or customer name; provide the missing detail instead. In date phrases,
+`kal` means yesterday; use `tomorrow` for the next day.
 
 ## Commands
 
 - `/start` — guide and privacy note.
 - `/all`, `/ledger <name>`, `/today`, `/month [month]` — balances and ledgers.
-- `/customer <name>` — add a customer with confirmation.
+- `/sabka_hisab` — alias for `/all`.
+- `/customer <name>` — add a customer with confirmation. If two customers have
+  the same name, add a distinguishing label as `/customer Aman | Main bazaar`.
 - `/undo`, `/edit` — correct recent records without hard-deleting ledger rows.
-- `/statement <name> [month]`, `/export` — statement and shop CSV export.
+- `/statement <name> [month]`, `/statementpdf <name | label>`, `/export`,
+  `/search <partial name>` — statements, shareable customer PDF, full shop CSV,
+  and partial-name search. The CSV includes the same outstanding total shown
+  by `/all`; the PDF transliterates names and items into Latin characters.
 - `/health`, `/deletemydata` — status and export-first, double-confirmed deletion.
 - `Avinash ka hisab delete krdo` — asks for explicit confirmation before clearing
   that customer's ledger; the customer remains and cleared rows are soft-voided
@@ -88,8 +100,12 @@ price or customer name; provide the missing detail instead.
 
 All ledger reads and writes are scoped to the user's shop. Money is stored as
 integer paise; customer balances are calculated from active entries less
-payments. Phone numbers, when collected by a future workflow, have an encrypted
-storage helper available.
+payments. Timestamps are UTC-aware internally; business dates are interpreted
+in IST. The bot stores customer names, ledger entries/payments, and Telegram
+account IDs for authorization and audit. Up to eight recent messages are kept
+until `/forget`; messages may be sent to Groq for AI parsing. Telegram messages
+are not end-to-end encrypted. The command menu is registered with Telegram on
+startup; BotFather may also be configured manually to show the same commands.
 
 The bot persists up to eight recent user messages and the last explicitly
 mentioned customer per authorized user/shop to understand follow-ups such as
@@ -104,8 +120,11 @@ python -m pytest
 
 Tests do not make live Telegram or Groq calls. They cover the mocked Groq API,
 parser examples, date and money handling, ledger isolation, confirmations,
-idempotent callbacks, migration compatibility, encrypted backup/restore, and
-admin invites.
+idempotent callbacks, migration compatibility, encrypted backup/restore,
+customer-label matching, and admin invites. To exercise PostgreSQL, set
+`POSTGRES_TEST_DATABASE_URL` to a dedicated disposable test database and run
+`python -m pytest tests/test_postgres.py`; the tests create and clean up only
+their own shop rows.
 
 ## Docker and VPS
 

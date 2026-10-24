@@ -2,14 +2,13 @@
 
 import asyncio
 import logging
-import re
 from datetime import datetime, time as datetime_time, timedelta
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -40,18 +39,15 @@ from khata_bot.handlers.operations import (
     edit_value_command,
     export_command,
     health_command,
+    search_command,
     statement_command,
+    statement_pdf_command,
     undo_command,
 )
 from khata_bot.services.backup import create_encrypted_backup
 from khata_bot.services.dates import IST
 
 logger = logging.getLogger(__name__)
-_TELEGRAM_TOKEN_PATTERN = re.compile(r"\b\d{5,}:[A-Za-z0-9_-]{20,}\b")
-
-
-def _redact_secrets(value: str) -> str:
-    return _TELEGRAM_TOKEN_PATTERN.sub("[REDACTED_TELEGRAM_TOKEN]", value)
 
 
 def _make_request() -> HTTPXRequest:
@@ -90,8 +86,8 @@ async def error_handler(
     application.bot_data["consecutive_failures"] = failures
     if error is not None:
         logger.error(
-            "Unhandled Telegram bot exception: %s",
-            _redact_secrets(str(error)),
+            "Unhandled Telegram bot exception (type=%s).",
+            type(error).__name__,
         )
 
     if failures >= 3:
@@ -105,8 +101,8 @@ async def error_handler(
                 )
             except TelegramError as alert_error:
                 logger.warning(
-                    "Could not send admin alert: %s",
-                    _redact_secrets(str(alert_error)),
+                    "Could not send admin alert (type=%s).",
+                    type(alert_error).__name__,
                 )
 
     if isinstance(update, Update) and update.effective_message is not None:
@@ -116,8 +112,8 @@ async def error_handler(
             )
         except TelegramError as reply_error:
             logger.warning(
-                "Could not send the error reply: %s",
-                _redact_secrets(str(reply_error)),
+                "Could not send the error reply (type=%s).",
+                type(reply_error).__name__,
             )
 
 
@@ -131,10 +127,13 @@ async def _daily_backup_loop(application: Application) -> None:
                 settings.backup_dir,
             )
             application.bot_data["backup_failures"] = 0
-        except (OSError, RuntimeError, ValueError):
+        except (OSError, RuntimeError, ValueError) as error:
             failures = application.bot_data.get("backup_failures", 0) + 1
             application.bot_data["backup_failures"] = failures
-            logger.exception("Encrypted database backup failed.")
+            logger.error(
+                "Encrypted database backup failed (type=%s).",
+                type(error).__name__,
+            )
             if failures >= 3:
                 application.bot_data["backup_failures"] = 0
                 try:
@@ -144,8 +143,8 @@ async def _daily_backup_loop(application: Application) -> None:
                     )
                 except TelegramError as alert_error:
                     logger.warning(
-                        "Could not send backup alert: %s",
-                        _redact_secrets(str(alert_error)),
+                        "Could not send backup alert (type=%s).",
+                        type(alert_error).__name__,
                     )
         now = datetime.now(IST)
         next_run = datetime.combine(
@@ -155,6 +154,25 @@ async def _daily_backup_loop(application: Application) -> None:
 
 
 async def _start_background_jobs(application: Application) -> None:
+    await application.bot.set_my_commands(
+        [
+            BotCommand("start", "Show help and privacy information"),
+            BotCommand("help", "Show usage examples"),
+            BotCommand("sabka_hisab", "Show all customer balances"),
+            BotCommand("ledger", "Show one customer's ledger"),
+            BotCommand("today", "Show today's summary"),
+            BotCommand("month", "Show this month's summary"),
+            BotCommand("customer", "Add a customer"),
+            BotCommand("statement", "Show a customer statement"),
+            BotCommand("statementpdf", "Export a customer statement as PDF"),
+            BotCommand("export", "Export the shop ledger as CSV"),
+            BotCommand("undo", "Undo the latest ledger change"),
+            BotCommand("edit", "Edit a recent ledger record"),
+            BotCommand("search", "Search customers by name"),
+            BotCommand("deletemydata", "Export and delete shop data"),
+            BotCommand("forget", "Clear recent chat context"),
+        ]
+    )
     application.bot_data["backup_task"] = asyncio.create_task(
         _daily_backup_loop(application)
     )
@@ -191,8 +209,9 @@ def build_application(
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("forget", forget_command))
+    application.add_handler(CommandHandler("help", unknown_command))
     application.add_handler(CallbackQueryHandler(confirmation_callback))
-    for command in ("all", "ledger", "today", "month"):
+    for command in ("all", "sabka_hisab", "ledger", "today", "month"):
         application.add_handler(CommandHandler(command, command_query))
     command_handlers = {
         "customer": customer_command,
@@ -200,6 +219,8 @@ def build_application(
         "edit": edit_command,
         "editvalue": edit_value_command,
         "statement": statement_command,
+        "statementpdf": statement_pdf_command,
+        "search": search_command,
         "export": export_command,
         "health": health_command,
         "deletemydata": delete_my_data_command,

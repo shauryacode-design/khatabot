@@ -11,9 +11,15 @@ from khata_bot.services.idempotency import claim_update
 
 START_GUIDE = (
     "Namaste! {shop} ke khata mein swagat hai.\n"
-    "Entry: Aman - chini 1kg 45 | Payment: Aman paid 500\n"
-    "Hisab: Aman ka hisab / sabka hisab\n"
-    "Privacy: Telegram messages end-to-end encrypted nahi hote."
+    "Entry (total price): Aman chini 1kg 45\n"
+    "Multiple items: Aman aata 10kg 400\nchini 2kg 100\n"
+    "Payment: Aman ne 500 diye\n"
+    "Purana balance: Aman pending balance 5000\n"
+    "Hisab: /ledger Aman | /sabka_hisab | /today | /month\n"
+    "Privacy: customer names, khata entries/payments, and Telegram account IDs "
+    "are stored to run the service. Up to eight recent messages are stored "
+    "for follow-ups until /forget. Messages may be sent to Groq for AI parsing. "
+    "Telegram messages are not end-to-end encrypted."
 )
 
 
@@ -41,5 +47,4 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await message.reply_text("Not authorized.")
         return
 
-    greeting = f"Namaste! {shop_name} ke khata mein swagat hai.\n"
     await message.reply_text(START_GUIDE.format(shop=shop_name or "aapke"))

@@ -3,8 +3,10 @@ cryptography==45.0.4
 httpx==0.28.1
 python-dotenv==1.1.1
 python-telegram-bot==21.11.1
+reportlab==4.4.3
 pydantic==2.11.7
 pytest==8.4.1
 SQLAlchemy==2.0.41
 tzdata==2025.2
+Unidecode==1.4.0
 psycopg[binary]==3.2.9

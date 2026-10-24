@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -6,9 +6,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from khata_bot.models import Base, Customer, Entry, Payment, Shop
-from khata_bot.services.customers import customer_matches, normalize_name
+from khata_bot.services.customers import (
+    create_customer,
+    customer_matches,
+    customer_normalized_key,
+    normalize_name,
+)
 from khata_bot.services.dates import month_bounds, parse_date
-from khata_bot.services.ledger import all_balances, customer_balance, ledger_rows
+from khata_bot.services.ledger import (
+    all_balances,
+    customer_balance,
+    ledger_rows,
+    utc_now,
+)
 from khata_bot.services.money import InvalidMoney, format_paise, rupees_to_paise
 
 
@@ -24,7 +34,8 @@ def test_money_uses_integer_paise_and_indian_grouping() -> None:
     "text,expected",
     [
         ("aaj", date(2026, 10, 20)),
-        ("kal", date(2026, 10, 21)),
+        ("kal", date(2026, 10, 19)),
+        ("tomorrow", date(2026, 10, 21)),
         ("parso", date(2026, 10, 22)),
         ("12 oct", date(2026, 10, 12)),
         ("12/10", date(2026, 10, 12)),
@@ -91,4 +102,97 @@ def test_ledger_balances_and_name_matching_are_shop_scoped() -> None:
             20_000,
         ]
         assert customer_matches(session, shop_a.id, "Aman ji")[0].id == aman_a.id
+    engine.dispose()
+
+
+def test_duplicate_customer_names_require_and_resolve_labels() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        shop = Shop(name="Labels")
+        session.add(shop)
+        session.flush()
+        customers = [
+            create_customer(session, shop.id, "Aman"),
+            create_customer(session, shop.id, "Aman", "Main market"),
+            create_customer(session, shop.id, "Aman", "Station road"),
+        ]
+
+        assert [
+            customer.label
+            for customer in customer_matches(session, shop.id, "Aman")
+        ] == [None, "Main market", "Station road"]
+        assert customer_matches(
+            session, shop.id, "Aman | Station road"
+        ) == [customers[2]]
+        assert customers[2].normalized_name == customer_normalized_key(
+            "Aman", "Station road"
+        )
+    engine.dispose()
+
+
+def test_balance_invariant_after_edit_and_void() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        shop = Shop(name="Invariant")
+        session.add(shop)
+        session.flush()
+        customer = Customer(shop_id=shop.id, name="Aman", normalized_name="aman")
+        other_customer = Customer(
+            shop_id=shop.id, name="Amar", normalized_name="amar"
+        )
+        session.add_all([customer, other_customer])
+        session.flush()
+        entry = Entry(
+            shop_id=shop.id,
+            customer_id=customer.id,
+            entry_date=date(2026, 10, 20),
+            item_name="chini",
+            price_paise=10_000,
+            created_by=1,
+        )
+        payment = Payment(
+            shop_id=shop.id,
+            customer_id=customer.id,
+            payment_date=date(2026, 10, 20),
+            amount_paise=3_000,
+            created_by=1,
+        )
+        session.add_all([entry, payment])
+        session.flush()
+        assert customer_balance(session, shop.id, customer.id) == 7_000
+
+        entry.price_paise = 12_000
+        session.flush()
+        assert customer_balance(session, shop.id, customer.id) == 9_000
+
+        entry.customer_id = other_customer.id
+        session.flush()
+        assert customer_balance(session, shop.id, customer.id) == -3_000
+        assert customer_balance(session, shop.id, other_customer.id) == 12_000
+
+        entry.voided_at = utc_now()
+        session.flush()
+        assert customer_balance(session, shop.id, other_customer.id) == 0
+        payment.voided_at = utc_now()
+        session.flush()
+        assert customer_balance(session, shop.id, customer.id) == 0
+        assert ledger_rows(session, shop.id, customer.id) == []
+    engine.dispose()
+
+
+def test_utc_timestamps_are_aware() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        shop = Shop(name="UTC")
+        session.add(shop)
+        session.flush()
+        assert shop.created_at.tzinfo is not None
+        assert shop.created_at.utcoffset() == timezone.utc.utcoffset(
+            shop.created_at
+        )
+        assert utc_now().tzinfo is not None
+        assert utc_now().utcoffset() == datetime.now(timezone.utc).utcoffset()
     engine.dispose()

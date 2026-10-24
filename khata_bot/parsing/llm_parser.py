@@ -116,7 +116,7 @@ async def parse_message(
                 )
                 if response.is_error:
                     body = _safe_body(response)
-                    logger.warning("Groq returned HTTP %s: %s", response.status_code, body)
+                    logger.warning("Groq returned HTTP %s.", response.status_code)
                     if _model_retired(response.status_code, body):
                         logger.error(
                             "Groq model %r is unavailable. Update GROQ_MODEL; using rules.",
@@ -130,9 +130,8 @@ async def parse_message(
                     if response.is_error:
                         body = _safe_body(response)
                         logger.warning(
-                            "Groq returned HTTP %s after retry: %s",
+                            "Groq returned HTTP %s after retry.",
                             response.status_code,
-                            body,
                         )
                         response.raise_for_status()
 

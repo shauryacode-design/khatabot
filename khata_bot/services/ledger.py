@@ -39,7 +39,11 @@ def all_balances(session: Session, shop_id: int) -> list[tuple[Customer, int]]:
     ]
     return sorted(
         [(customer, balance) for customer, balance in balances if balance > 0],
-        key=lambda pair: (-pair[1], pair[0].name.casefold()),
+        key=lambda pair: (
+            -pair[1],
+            pair[0].name.casefold(),
+            (pair[0].label or "").casefold(),
+        ),
     )
 
 
@@ -64,10 +68,11 @@ def ledger_rows(
         )
         .order_by(Payment.payment_date, Payment.id)
     ).all()
-    events: list[tuple[date, int, dict[str, Any]]] = []
+    events: list[tuple[date, datetime, int, dict[str, Any]]] = []
     events.extend(
         (
             row.entry_date,
+            row.created_at,
             row.id,
             {
                 "date": row.entry_date,
@@ -81,6 +86,7 @@ def ledger_rows(
     events.extend(
         (
             row.payment_date,
+            row.created_at,
             row.id,
             {
                 "date": row.payment_date,
@@ -91,10 +97,10 @@ def ledger_rows(
         )
         for row in payments
     )
-    events.sort(key=lambda event: (event[0], event[1]))
+    events.sort(key=lambda event: (event[0], event[1], event[2]))
     balance = 0
     rows = []
-    for _day, _id, event in events:
+    for _day, _created_at, _id, event in events:
         balance += event["amount"]
         rows.append({**event, "balance": balance})
     return rows
@@ -184,7 +190,7 @@ def void_customer_ledger(
     user_id: int,
 ) -> tuple[int, int]:
     """Soft-void all active customer ledger rows, retaining their audit trail."""
-    now = utc_now_naive()
+    now = utc_now()
     entries = session.execute(
         update(Entry)
         .where(
@@ -213,6 +219,10 @@ def void_customer_ledger(
     return entries, payments
 
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def utc_now_naive() -> datetime:
-    """SQLite stores UTC timestamps without timezone metadata."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Backward-compatible alias; timestamps returned are aware UTC."""
+    return utc_now()

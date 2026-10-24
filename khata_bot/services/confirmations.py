@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select, update
 
 from khata_bot.models import PendingConfirmation
-from khata_bot.services.ledger import utc_now_naive
+from khata_bot.services.ledger import utc_now
 
 CONFIRMATION_MINUTES = 30
 
@@ -23,8 +23,8 @@ def create_confirmation(
         user_id=user_id,
         kind=kind,
         payload=payload,
-        created_at=utc_now_naive(),
-        expires_at=utc_now_naive() + timedelta(minutes=CONFIRMATION_MINUTES),
+        created_at=utc_now(),
+        expires_at=utc_now() + timedelta(minutes=CONFIRMATION_MINUTES),
         status="pending",
     )
     session.add(confirmation)

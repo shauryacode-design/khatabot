@@ -4,7 +4,7 @@ from sqlalchemy import delete, update
 from sqlalchemy.orm import Session
 
 from khata_bot.models import AuditLog, Customer, Entry, Invite, Payment, PendingConfirmation, Shop, User
-from khata_bot.services.ledger import utc_now_naive
+from khata_bot.services.ledger import utc_now
 
 
 def delete_exported_shop_data(
@@ -22,7 +22,7 @@ def delete_exported_shop_data(
             PendingConfirmation.user_id == user_id,
             PendingConfirmation.kind == "delete_stage2",
             PendingConfirmation.status == "pending",
-            PendingConfirmation.expires_at > utc_now_naive(),
+            PendingConfirmation.expires_at > utc_now(),
         )
         .values(status="processing")
     )

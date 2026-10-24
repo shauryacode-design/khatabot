@@ -4,7 +4,7 @@ Money is stored as integer paise. A balance is calculated from active ledger
 rows when requested; it is never stored on the customer.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     JSON,
@@ -15,11 +15,36 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
     UniqueConstraint,
     BigInteger,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class UTCDateTime(TypeDecorator[datetime]):
+    """Store timestamps in UTC and return timezone-aware UTC datetimes."""
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Datetime values must be timezone-aware.")
+        value = value.astimezone(timezone.utc)
+        return value.replace(tzinfo=None) if dialect.name == "sqlite" else value
+
+    def process_result_value(
+        self, value: datetime | None, _dialect
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -32,7 +57,7 @@ class Shop(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     users: Mapped[list["User"]] = relationship(back_populates="shop")
     customers: Mapped[list["Customer"]] = relationship(back_populates="shop")
@@ -51,7 +76,7 @@ class User(Base):
     )
     role: Mapped[str] = mapped_column(String(30), nullable=False, default="owner")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     shop: Mapped[Shop] = relationship(back_populates="users")
 
@@ -69,9 +94,10 @@ class Customer(Base):
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     normalized_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(80))
     phone_encrypted: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     shop: Mapped[Shop] = relationship(back_populates="customers")
     entries: Mapped[list["Entry"]] = relationship(back_populates="customer")
@@ -96,10 +122,10 @@ class Entry(Base):
     item_name: Mapped[str] = mapped_column(String(160), nullable=False)
     quantity_text: Mapped[str | None] = mapped_column(String(80))
     price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
-    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    voided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     customer: Mapped[Customer] = relationship(back_populates="entries")
 
@@ -120,10 +146,10 @@ class Payment(Base):
     )
     payment_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
-    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    voided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     customer: Mapped[Customer] = relationship(back_populates="payments")
 
@@ -142,9 +168,9 @@ class PendingConfirmation(Base):
     kind: Mapped[str] = mapped_column(String(30), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
 
 
@@ -160,16 +186,16 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(40), nullable=False)
     details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
 
 class ProcessedUpdate(Base):
     __tablename__ = "processed_updates"
 
-    update_id: Mapped[int] = mapped_column(primary_key=True)
+    update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     processed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
 
@@ -185,7 +211,7 @@ class ConversationMemory(Base):
     history: Mapped[list[dict[str, str]]] = mapped_column(JSON, nullable=False, default=list)
     last_customer_name: Mapped[str | None] = mapped_column(String(120))
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 
@@ -197,6 +223,6 @@ class Invite(Base):
         ForeignKey("shops.id", ondelete="CASCADE"), nullable=False, index=True
     )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)

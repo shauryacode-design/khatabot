@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from khata_bot.models import Invite, Shop, User
-from khata_bot.services.ledger import utc_now_naive
+from khata_bot.services.ledger import utc_now
 
 
 def create_shop(session: Session, name: str, admin_telegram_id: int) -> Shop:
@@ -63,7 +63,7 @@ def create_invite(
         Invite(
             shop_id=shop_id,
             token_hash=hashlib.sha256(code.encode("utf-8")).hexdigest(),
-            expires_at=utc_now_naive() + timedelta(days=7),
+            expires_at=utc_now() + timedelta(days=7),
             created_by=created_by,
         )
     )
@@ -79,7 +79,7 @@ def redeem_invite(
         .where(
             Invite.token_hash == code_hash,
             Invite.used_at.is_(None),
-            Invite.expires_at > utc_now_naive(),
+            Invite.expires_at > utc_now(),
         )
         .with_for_update()
     )
@@ -95,7 +95,7 @@ def redeem_invite(
         shop_id=invite.shop_id,
         role="owner",
     )
-    invite.used_at = utc_now_naive()
+    invite.used_at = utc_now()
     session.add(user)
     session.flush()
     return user

@@ -23,7 +23,12 @@ from khata_bot.services.confirmations import (
     expired,
     get_pending_confirmation,
 )
-from khata_bot.services.customers import customer_matches, normalize_name
+from khata_bot.services.customers import (
+    customer_display_name,
+    customer_matches,
+    customer_normalized_key,
+    normalize_name,
+)
 from khata_bot.services.dates import month_bounds, today_ist
 from khata_bot.services.deletion import delete_exported_shop_data
 from khata_bot.services.ledger import (
@@ -34,7 +39,7 @@ from khata_bot.services.ledger import (
     record_entry,
     record_opening_balance,
     record_payment,
-    utc_now_naive,
+    utc_now,
     void_customer_ledger,
     OPENING_BALANCE_ITEM,
 )
@@ -50,6 +55,17 @@ from khata_bot.services.auth import find_authorized_user
 logger = logging.getLogger(__name__)
 _LEDGER_PAGE_SIZE = 8
 _RATE_LIMIT_STATE_KEY = "rate_limit_events"
+HELP_REPLY = (
+    "Khata help:\n"
+    "• Udhaar: Aman chini 1kg 45 — rakam item ki total keemat hai, per-unit rate nahi.\n"
+    "• Kai items: Aman aata 10kg 400\nchini 2kg 100 (neeche wali line par customer wahi rahega).\n"
+    "• Payment: Aman ne 200 diye.\n"
+    "• Purana baki: Aman pending balance 5000.\n"
+    "• Hisab: /ledger Aman, /all, /today, /month.\n"
+    "• Statement: /statement Aman; PDF: /statementpdf Aman; CSV: /export.\n"
+    "• Search: /search Aman; duplicate naam: /customer Aman | Main market.\n"
+    "Har badlav Save/Cancel se confirm hota hai. Date ke liye kal ya 22 Oct likhein."
+)
 
 
 def _rate_limited(context: ContextTypes.DEFAULT_TYPE, user_id: int, limit: int) -> bool:
@@ -97,9 +113,19 @@ def _confirmation_text(payload: dict) -> str:
     title = payload["customer_name"]
     lines = [f"{title} | {_format_date(date_value)}"]
     if payload["kind"] == "payment":
+        current_balance = payload.get("current_balance_paise", 0)
         lines.extend(
-            [f"Payment {format_paise(payload['amount_paise'])}", "Save this payment?"]
+            [
+                f"Payment received {format_paise(payload['amount_paise'])}",
+                f"Current balance {format_paise(current_balance)}",
+            ]
         )
+        if payload.get("advance"):
+            lines.append(
+                "⚠️ Payment balance se zyada hai; isse customer ka advance "
+                "balance hoga."
+            )
+        lines.append("Save this payment?")
     else:
         total = 0
         for item in payload["items"]:
@@ -112,6 +138,7 @@ def _confirmation_text(payload: dict) -> str:
         lines.extend([f"Total {format_paise(total)}", "Save this entry?"])
     if payload.get("new_customer"):
         lines.insert(1, "New customer")
+        lines[-1] = "Naya customer banakar transaction save karein?"
     return "\n".join(lines)
 
 
@@ -132,16 +159,19 @@ def _ledger_text(customer: Customer, rows: list[dict], page: int) -> tuple[str, 
     start = page * _LEDGER_PAGE_SIZE
     visible = rows[start : start + _LEDGER_PAGE_SIZE]
     if not rows:
-        return f"{customer.name} ka khata abhi khaali hai.", None
-    lines = [f"{customer.name} ka khata"]
+        return f"{customer_display_name(customer)} ka khata abhi khaali hai.", None
+    lines = [f"{customer_display_name(customer)} ka khata"]
     for row in visible:
         amount = format_paise(abs(row["amount"]))
         if row["kind"] == "payment":
             summary = f"  Payment −{amount}"
         else:
             summary = f"  {row['description']} +{amount}"
-        lines.append(f"{_format_date(row['date'])}{summary}")
-    lines.append(f"Balance: {format_paise(rows[-1]['balance'])}")
+        lines.append(
+            f"{_format_date(row['date'])}{summary} "
+            f"→ {format_paise(row['balance'])}"
+        )
+    lines.append(f"Balance: {format_paise(visible[-1]['balance'])}")
     if len(rows) <= _LEDGER_PAGE_SIZE:
         return "\n".join(lines), None
     buttons = []
@@ -175,7 +205,9 @@ async def _send_all_balances(message, session, shop_id: int) -> None:
         return
     lines = ["Sabhi customers ka baaki hisaab:"]
     for customer, balance in balances[:45]:
-        lines.append(f"{customer.name}: {format_paise(balance)}")
+        lines.append(
+            f"{customer_display_name(customer)}: {format_paise(balance)}"
+        )
     lines.append(f"Total baaki: {format_paise(sum(item[1] for item in balances))}")
     await message.reply_text("\n".join(lines))
 
@@ -224,14 +256,21 @@ async def _send_period(
             entry.entry_date,
             entry.id,
             "opening_balance" if entry.item_name == OPENING_BALANCE_ITEM else "entry",
-            customer.name,
+            customer_display_name(customer),
             entry.price_paise,
             entry.item_name,
         )
         for entry, customer in entries
     ]
     merged.extend(
-        (payment.payment_date, payment.id, "payment", customer.name, payment.amount_paise, "Payment")
+        (
+            payment.payment_date,
+            payment.id,
+            "payment",
+            customer_display_name(customer),
+            payment.amount_paise,
+            "Payment",
+        )
         for payment, customer in payments
     )
     for event_date, _row_id, kind, customer_name, amount, description in sorted(merged):
@@ -267,6 +306,9 @@ async def _reply_to_query(
     shop_id: int,
     parsed: ParsedMessage,
 ) -> None:
+    if parsed.intent == "invalid_input":
+        await message.reply_text(parsed.reply or HELP_REPLY)
+        return
     if parsed.query_type == "all":
         await _send_all_balances(message, session, shop_id)
         return
@@ -295,11 +337,19 @@ async def _reply_to_query(
     if not matches:
         await message.reply_text(f"{parsed.customer} naam ka customer nahi mila.")
         return
-    customer = matches[0]
-    if matches[0].normalized_name != normalize_name(parsed.customer):
+    exact = (
+        matches
+        if "|" in parsed.customer
+        else [
+            item
+            for item in matches
+            if normalize_name(item.name) == normalize_name(parsed.customer)
+        ]
+    )
+    if len(exact) != 1:
         buttons = [
             InlineKeyboardButton(
-                item.name, callback_data=f"ledger:{item.id}"
+                customer_display_name(item), callback_data=f"ledger:{item.id}"
             )
             for item in matches[:4]
         ]
@@ -308,6 +358,7 @@ async def _reply_to_query(
             reply_markup=InlineKeyboardMarkup([buttons]),
         )
         return
+    customer = exact[0]
     await _show_customer_ledger(message, session, shop_id, customer)
 
 
@@ -361,19 +412,38 @@ async def _create_write_confirmation(
         "amount_paise": total_paise if kind == "payment" else None,
         "new_customer": False,
     }
+    if kind == "payment":
+        payload["current_balance_paise"] = 0
+        payload["advance"] = True
     session_factory = context.application.bot_data["session_factory"]
     with session_factory.begin() as session:
         matches = customer_matches(session, shop_id, parsed.customer)
-        exact = [item for item in matches if item.normalized_name == normalize_name(parsed.customer)]
+        exact = (
+            matches
+            if "|" in parsed.customer
+            else [
+                item
+                for item in matches
+                if normalize_name(item.name) == normalize_name(parsed.customer)
+            ]
+        )
         if len(exact) == 1:
             payload["customer_id"] = exact[0].id
-            payload["customer_name"] = exact[0].name
+            payload["customer_name"] = customer_display_name(exact[0])
+            if kind == "payment":
+                current_balance = customer_balance(
+                    session, shop_id, exact[0].id
+                )
+                payload["current_balance_paise"] = current_balance
+                payload["advance"] = total_paise > max(current_balance, 0)
+                warning = warning or payload["advance"]
             candidates = []
         else:
             candidates = matches
             if candidates:
                 payload["candidate_ids"] = [item.id for item in candidates]
                 payload["new_customer"] = True
+                payload["allow_new_customer"] = not exact
             else:
                 payload["new_customer"] = True
 
@@ -383,21 +453,25 @@ async def _create_write_confirmation(
             )
             buttons = [
                 InlineKeyboardButton(
-                    candidate.name,
+                    customer_display_name(candidate),
                     callback_data=f"pick:{confirmation.id}:{candidate.id}",
                 )
                 for candidate in candidates[:4]
             ]
-            buttons.append(
-                InlineKeyboardButton(
-                    f"New customer: {parsed.customer[:30]}",
-                    callback_data=f"new:{confirmation.id}",
+            if not exact:
+                buttons.append(
+                    InlineKeyboardButton(
+                        f"New customer: {parsed.customer[:30]}",
+                        callback_data=f"new:{confirmation.id}",
+                    )
                 )
-            )
             if any(len(button.callback_data.encode("utf-8")) > 64 for button in buttons):
                 raise ValueError("Customer callback data exceeds Telegram's 64-byte limit.")
             keyboard = InlineKeyboardMarkup([buttons[:2], buttons[2:]])
-            text = f"Is naam se milte-julte customers mile. Sahi customer chuniye:\n{', '.join(item.name for item in candidates[:4])}"
+            text = (
+                "Is naam se milte-julte customers mile. Sahi customer chuniye:\n"
+                + "\n".join(customer_display_name(item) for item in candidates[:4])
+            )
             await message.reply_text(text, reply_markup=keyboard)
             return
 
@@ -428,6 +502,12 @@ async def _create_opening_balances_confirmation(
     balances = []
     seen_names = set()
     for item in parsed.opening_balances:
+        if "|" in item.customer and not item.customer.split("|", 1)[1].strip():
+            await message.reply_text(
+                "Duplicate customer naam ke baad label bhi likhiye: "
+                "Aman | Main market pending balance 500."
+            )
+            return
         normalized = normalize_name(item.customer)
         if normalized in seen_names:
             await message.reply_text(
@@ -446,18 +526,30 @@ async def _create_opening_balances_confirmation(
     with session_factory.begin() as session:
         for item in balances:
             matches = customer_matches(session, shop_id, item["customer_name"])
-            exact = [
-                candidate
-                for candidate in matches
-                if candidate.normalized_name == normalize_name(item["customer_name"])
-            ]
-            if exact:
+            exact = (
+                matches
+                if "|" in item["customer_name"]
+                else [
+                    candidate
+                    for candidate in matches
+                    if normalize_name(candidate.name)
+                    == normalize_name(item["customer_name"])
+                ]
+            )
+            if len(exact) == 1:
                 item["customer_id"] = exact[0].id
-                item["customer_name"] = exact[0].name
+                item["customer_name"] = customer_display_name(exact[0])
+            elif exact:
+                await message.reply_text(
+                    f"'{item['customer_name']}' naam ke kai customers hain. "
+                    "Unique khata chunne ke liye Name | Label format use karein."
+                )
+                return
             elif matches:
                 await message.reply_text(
                     f"'{item['customer_name']}' ka milta-julta customer "
-                    f"'{matches[0].name}' hai. Galat khate mein balance na jaye, "
+                    f"'{customer_display_name(matches[0])}' hai. "
+                    "Galat khate mein balance na jaye, "
                     "isliye exact customer name se dobara bhejiye."
                 )
                 return
@@ -490,17 +582,35 @@ async def _start_customer_creation(
     name: str,
 ) -> None:
     local_user_id, shop_id, telegram_user_id = membership
-    clean_name = " ".join(name.strip().split())[:120]
+    raw_name, separator, raw_label = name.partition("|")
+    clean_name = " ".join(raw_name.strip().split())[:120]
+    clean_label = (
+        " ".join(raw_label.strip().split())[:80] or None if separator else None
+    )
     if not clean_name:
         await message.reply_text("Naye customer ka naam likhiye.")
+        return
+    if separator and not clean_label:
+        await message.reply_text("Duplicate naam ke saath non-empty label bhi likhiye.")
         return
     session_factory = context.application.bot_data["session_factory"]
     with session_factory.begin() as session:
         matches = customer_matches(session, shop_id, clean_name)
-        if any(item.normalized_name == normalize_name(clean_name) for item in matches):
+        if clean_label and customer_matches(
+            session, shop_id, f"{clean_name}|{clean_label}"
+        ):
+            await message.reply_text(
+                f"{clean_name} ({clean_label}) pehle se khate mein hai."
+            )
+            return
+        exact = [
+            item for item in matches
+            if normalize_name(item.name) == normalize_name(clean_name)
+        ]
+        if exact and not clean_label:
             await message.reply_text(f"{clean_name} pehle se khate mein hai.")
             return
-        if matches:
+        if matches and not clean_label:
             confirmation = create_confirmation(
                 session,
                 shop_id,
@@ -513,7 +623,7 @@ async def _start_customer_creation(
             )
             buttons = [
                 InlineKeyboardButton(
-                    item.name,
+                    customer_display_name(item),
                     callback_data=f"known:{confirmation.id}:{item.id}",
                 )
                 for item in matches[:4]
@@ -534,10 +644,15 @@ async def _start_customer_creation(
             shop_id,
             local_user_id,
             "customer_create",
-            {"customer_name": clean_name},
+            {
+                "customer_name": clean_name,
+                "customer_label": clean_label,
+                "explicit_new": bool(clean_label),
+            },
         )
     await message.reply_text(
-        f"Naya customer khate mein add karein: {clean_name}?",
+        f"Naya customer khate mein add karein: "
+        f"{clean_name}{f' ({clean_label})' if clean_label else ''}?",
         reply_markup=_save_keyboard(confirmation.id),
     )
 
@@ -555,17 +670,25 @@ async def _start_clear_customer_ledger(
         )
         return
     session_factory = context.application.bot_data["session_factory"]
-    normalized_name = normalize_name(customer_name)
     with session_factory.begin() as session:
-        customer = session.scalar(
-            select(Customer).where(
-                Customer.shop_id == shop_id,
-                Customer.normalized_name == normalized_name,
-            )
+        matches = customer_matches(session, shop_id, customer_name)
+        exact = (
+            matches
+            if "|" in customer_name
+            else [
+                item
+                for item in matches
+                if normalize_name(item.name) == normalize_name(customer_name)
+            ]
         )
-        if customer is None:
-            matches = customer_matches(session, shop_id, customer_name)
-            if matches:
+        if len(exact) != 1:
+            if exact:
+                names = ", ".join(customer_display_name(item) for item in exact)
+                await message.reply_text(
+                    "Kai customers ka naam same hai. Sahi khata chunne ke liye "
+                    f"Name | Label likhiye: {names}"
+                )
+            elif matches:
                 await message.reply_text(
                     "Galat customer ka ledger clear na ho, isliye exact naam "
                     "match nahi hua. Customer ka sahi naam dobara likhiye."
@@ -573,6 +696,7 @@ async def _start_clear_customer_ledger(
             else:
                 await message.reply_text(f"{customer_name} naam ka customer nahi mila.")
             return
+        customer = exact[0]
         entries = session.scalar(
             select(func.count(Entry.id)).where(
                 Entry.shop_id == shop_id,
@@ -589,7 +713,8 @@ async def _start_clear_customer_ledger(
         ) or 0
         if entries + payments == 0:
             await message.reply_text(
-                f"{customer.name} ka ledger pehle se khaali hai. Kuch delete nahi hua."
+                f"{customer_display_name(customer)} ka ledger pehle se khaali hai. "
+                "Kuch delete nahi hua."
             )
             return
         confirmation = create_confirmation(
@@ -597,11 +722,14 @@ async def _start_clear_customer_ledger(
             shop_id,
             local_user_id,
             "clear_customer_ledger",
-            {"customer_id": customer.id, "customer_name": customer.name},
+            {
+                "customer_id": customer.id,
+                "customer_name": customer_display_name(customer),
+            },
         )
         confirmation_id = confirmation.id
         response = (
-            f"{customer.name} ke poore ledger ke {entries} entries aur "
+            f"{customer_display_name(customer)} ke poore ledger ke {entries} entries aur "
             f"{payments} payments clear karne hain? Customer record rahega; "
             "ledger rows audit ke liye soft-void hongi. Confirm kiye bina "
             "kuch nahi badlega."
@@ -651,7 +779,7 @@ async def text_fallback(
                     PendingConfirmation.user_id == local_user_id,
                     PendingConfirmation.kind == "clear_customer_ledger",
                     PendingConfirmation.status == "pending",
-                    PendingConfirmation.expires_at > utc_now_naive(),
+                    PendingConfirmation.expires_at > utc_now(),
                 )
                 .order_by(PendingConfirmation.id.desc())
                 .limit(1)
@@ -669,7 +797,11 @@ async def text_fallback(
         )
         if rule_parsed.intent == "delete_ledger":
             parsed, used_fallback = rule_parsed, True
-        elif rule_parsed.intent in {"opening_balance", "opening_balance_help"}:
+        elif rule_parsed.intent in {
+            "opening_balance",
+            "opening_balance_help",
+            "invalid_input",
+        }:
             parsed, used_fallback = rule_parsed, False
         else:
             parsed, used_fallback = await parse_message(
@@ -698,6 +830,9 @@ async def text_fallback(
             or "Har customer ka naam aur pending balance alag line mein bhejiye."
         )
         return
+    if parsed.intent == "invalid_input":
+        await message.reply_text(parsed.reply or HELP_REPLY)
+        return
     if parsed.intent == "other":
         add_customer = re.match(
             r"^(?:please\s+)?(?:add|create|new|register)\s+"
@@ -710,10 +845,7 @@ async def text_fallback(
                 message, context, membership, add_customer.group(1)
             )
             return
-        reply = parsed.reply or "Hello sir! Aapke khate mein kaise madad karun?"
-        if used_fallback:
-            reply = f"⚠️ Internet/AI available nahi tha; simple reply de raha hoon.\n{reply}"
-        await message.reply_text(reply)
+        await message.reply_text(HELP_REPLY)
         return
 
     if parsed.intent == "entry" and not parsed.customer and conversation.last_customer:
@@ -825,6 +957,11 @@ async def confirmation_callback(
             if customer_similar_result is not None:
                 pass
             elif action == "pick" and candidate_id is not None:
+                if candidate_id not in confirmation.payload.get(
+                    "candidate_ids", []
+                ):
+                    await query.edit_message_text("Yeh customer choice active nahi hai.")
+                    return
                 customer = session.scalar(
                     select(Customer).where(
                         Customer.id == candidate_id,
@@ -835,13 +972,33 @@ async def confirmation_callback(
                     await query.edit_message_text("Customer nahi mila. Message phir se bhejiye.")
                     return
                 confirmation.payload["customer_id"] = customer.id
-                confirmation.payload["customer_name"] = customer.name
+                confirmation.payload["customer_name"] = customer_display_name(
+                    customer
+                )
                 confirmation.payload["new_customer"] = False
+                confirmation.payload.pop("allow_new_customer", None)
+                if confirmation.payload["kind"] == "payment":
+                    current_balance = customer_balance(
+                        session, shop_id, customer.id
+                    )
+                    amount_paise = confirmation.payload["amount_paise"]
+                    confirmation.payload["current_balance_paise"] = current_balance
+                    confirmation.payload["advance"] = amount_paise > max(
+                        current_balance, 0
+                    )
             else:
+                if not confirmation.payload.get("allow_new_customer"):
+                    await query.edit_message_text(
+                        "Naya customer option available nahi hai. Sahi naam chuniye."
+                    )
+                    return
                 confirmation.payload.pop("candidate_ids", None)
                 confirmation.payload.pop("customer_id", None)
                 confirmation.payload["new_customer"] = True
                 confirmation.payload["explicit_new"] = True
+                if confirmation.payload["kind"] == "payment":
+                    confirmation.payload["current_balance_paise"] = 0
+                    confirmation.payload["advance"] = True
             if customer_similar_result is None:
                 if action not in {"pick", "new"}:
                     await query.edit_message_text("Yeh customer choice ab active nahi hai.")
@@ -899,6 +1056,49 @@ async def confirmation_callback(
                 else "Yeh delete confirmation ab active nahi hai."
             )
             return
+        if action == "editpay":
+            with session_factory.begin() as session:
+                payment = session.scalar(
+                    select(Payment).where(
+                        Payment.id == confirmation_id,
+                        Payment.shop_id == shop_id,
+                        Payment.voided_at.is_(None),
+                    )
+                )
+                if payment is None:
+                    await query.edit_message_text(
+                        "Yeh payment nahi mili ya pehle hi void hai."
+                    )
+                    return
+                confirmation = create_confirmation(
+                    session,
+                    shop_id,
+                    local_user_id,
+                    "edit_menu",
+                    {
+                        "record_type": "payment",
+                        "payment_id": payment.id,
+                    },
+                )
+                buttons = [
+                    InlineKeyboardButton(
+                        label,
+                        callback_data=f"field:{confirmation.id}:{field}",
+                    )
+                    for label, field in (
+                        ("Amount", "price"),
+                        ("Customer", "customer"),
+                        ("Date", "date"),
+                    )
+                ]
+                text = (
+                    f"Payment {format_paise(payment.amount_paise)} — "
+                    "kya badalna hai?"
+                )
+            await query.edit_message_text(
+                text, reply_markup=InlineKeyboardMarkup([buttons])
+            )
+            return
         if action == "edit":
             with session_factory.begin() as session:
                 entry = session.scalar(
@@ -918,9 +1118,13 @@ async def confirmation_callback(
                     shop_id,
                     local_user_id,
                     "edit_menu",
-                    {"entry_id": entry.id},
+                    {"record_type": "entry", "entry_id": entry.id},
                 )
-                editable_fields = [("Price", "price"), ("Date", "date")]
+                editable_fields = [
+                    ("Price", "price"),
+                    ("Customer", "customer"),
+                    ("Date", "date"),
+                ]
                 if entry.item_name != OPENING_BALANCE_ITEM:
                     editable_fields.insert(1, ("Item", "item"))
                 buttons = [
@@ -951,7 +1155,12 @@ async def confirmation_callback(
                 text, reply_markup=InlineKeyboardMarkup([buttons])
             )
             return
-        if action == "field" and len(parts) == 3 and parts[2] in {"price", "item", "date"}:
+        if action == "field" and len(parts) == 3 and parts[2] in {
+            "price",
+            "item",
+            "customer",
+            "date",
+        }:
             with session_factory.begin() as session:
                 confirmation = get_pending_confirmation(
                     session, confirmation_id, shop_id, local_user_id
@@ -960,6 +1169,11 @@ async def confirmation_callback(
                     await query.edit_message_text("Yeh edit request ab active nahi hai.")
                     return
                 if parts[2] == "item":
+                    if confirmation.payload.get("record_type") == "payment":
+                        await query.edit_message_text(
+                            "Payment mein item detail nahi hoti."
+                        )
+                        return
                     entry = session.scalar(
                         select(Entry).where(
                             Entry.id == confirmation.payload["entry_id"],
@@ -981,7 +1195,8 @@ async def confirmation_callback(
                 confirmation.status = "awaiting_input"
                 confirmation.payload["field"] = parts[2]
             await query.edit_message_text(
-                f"Nayi {parts[2]} bhejne ke liye yeh command bhejiye:\n"
+                f"Nayi {parts[2]} bhejne ke liye yeh command bhejiye "
+                "(customer ke liye exact naam ya Name | Label):\n"
                 f"/editvalue {confirmation_id} <new value>"
             )
             return
@@ -1056,7 +1271,7 @@ async def confirmation_callback(
                     confirmation.status = "cancelled"
                     result_text = "Yeh record pehle hi badal chuka hai."
                 else:
-                    record.voided_at = utc_now_naive()
+                    record.voided_at = utc_now()
                     confirmation.status = "done"
                     audit(
                         session,
@@ -1130,70 +1345,118 @@ async def confirmation_callback(
             result_text = "❌ Cancel kar diya. Khate mein kuch nahi badla."
         elif confirmation.kind in {"delete_entry", "edit_change"}:
             payload = confirmation.payload
-            entry = session.scalar(
-                select(Entry).where(
-                    Entry.id == payload["entry_id"],
-                    Entry.shop_id == shop_id,
-                    Entry.voided_at.is_(None),
+            record_type = payload.get("record_type", "entry")
+            if confirmation.kind == "delete_entry" or record_type == "entry":
+                record = session.scalar(
+                    select(Entry).where(
+                        Entry.id == payload["entry_id"],
+                        Entry.shop_id == shop_id,
+                        Entry.voided_at.is_(None),
+                    )
                 )
-            )
-            if entry is None:
+            else:
+                record = session.scalar(
+                    select(Payment).where(
+                        Payment.id == payload["payment_id"],
+                        Payment.shop_id == shop_id,
+                        Payment.voided_at.is_(None),
+                    )
+                )
+            if record is None:
                 confirmation.status = "cancelled"
-                result_text = "Yeh entry nahi mili ya pehle hi badal chuki hai."
+                result_text = "Yeh record nahi mila ya pehle hi badal chuka hai."
             elif confirmation.kind == "delete_entry":
-                entry.voided_at = utc_now_naive()
+                record.voided_at = utc_now()
                 confirmation.status = "done"
                 audit(
                     session,
                     shop_id,
                     telegram_user_id,
                     "entry_voided",
-                    {"entry_id": entry.id},
+                    {"entry_id": record.id},
                 )
                 result_text = "✅ Entry void kar di. Audit record rakha gaya hai."
             else:
                 field = payload["field"]
                 if field == "price":
-                    entry.price_paise = payload["new_value"]
+                    if record_type == "payment":
+                        record.amount_paise = payload["new_value"]
+                    else:
+                        record.price_paise = payload["new_value"]
                 elif field == "date":
-                    entry.entry_date = date.fromisoformat(payload["new_value"])
+                    if record_type == "payment":
+                        record.payment_date = date.fromisoformat(payload["new_value"])
+                    else:
+                        record.entry_date = date.fromisoformat(payload["new_value"])
+                elif field == "customer":
+                    record.customer_id = payload["new_value"]
                 else:
-                    entry.item_name = payload["new_value"]
+                    record.item_name = payload["new_value"]
                 confirmation.status = "done"
                 audit(
                     session,
                     shop_id,
                     telegram_user_id,
-                    "entry_edited",
-                    {"entry_id": entry.id, "field": field},
+                    f"{record_type}_edited",
+                    {
+                        f"{record_type}_id": record.id,
+                        "field": field,
+                        **(
+                            {"customer_id": payload["new_value"]}
+                            if field == "customer"
+                            else {}
+                        ),
+                    },
                 )
-                result_text = "✅ Entry update ho gayi."
+                result_text = (
+                    "✅ Payment update ho gayi."
+                    if record_type == "payment"
+                    else "✅ Entry update ho gayi."
+                )
         elif confirmation.kind == "customer_create":
             customer_name = confirmation.payload["customer_name"]
-            similar = customer_matches(session, shop_id, customer_name)
-            if similar and not confirmation.payload.get("explicit_new"):
+            customer_label = confirmation.payload.get("customer_label")
+            if customer_label and customer_matches(
+                session, shop_id, f"{customer_name}|{customer_label}"
+            ):
                 confirmation.status = "cancelled"
                 result_text = (
-                    "Naya customer create nahi kiya, kyunki milta-julta naam "
-                    "pehle se khate mein hai. Naam check karke dobara bhejiye."
+                    f"{customer_name} ({customer_label}) pehle se khate mein hai."
                 )
+                customer_name = ""
+            if not customer_name:
+                pass
             else:
-                customer = Customer(
-                    shop_id=shop_id,
-                    name=customer_name,
-                    normalized_name=normalize_name(customer_name),
-                )
-                session.add(customer)
-                session.flush()
-                confirmation.status = "done"
-                audit(
-                    session,
-                    shop_id,
-                    telegram_user_id,
-                    "customer_created",
-                    {"customer_id": customer.id},
-                )
-                result_text = f"✅ {customer.name} customer khate mein add ho gaya."
+                similar = customer_matches(session, shop_id, customer_name)
+                if similar and not confirmation.payload.get("explicit_new"):
+                    confirmation.status = "cancelled"
+                    result_text = (
+                        "Naya customer create nahi kiya, kyunki milta-julta naam "
+                        "pehle se khate mein hai. Naam check karke dobara bhejiye."
+                    )
+                else:
+                    customer = Customer(
+                        shop_id=shop_id,
+                        name=customer_name,
+                        normalized_name=customer_normalized_key(
+                            customer_name, customer_label
+                        ),
+                        label=customer_label,
+                    )
+                    session.add(customer)
+                    session.flush()
+                    confirmation.status = "done"
+                    audit(
+                        session,
+                        shop_id,
+                        telegram_user_id,
+                        "customer_created",
+                        {"customer_id": customer.id},
+                    )
+                    result_text = (
+                        f"✅ {customer_display_name(customer)} customer khate mein "
+                        "add ho gaya."
+                    )
         elif confirmation.kind == "clear_customer_ledger":
             customer = session.scalar(
                 select(Customer).where(
@@ -1210,7 +1473,7 @@ async def confirmation_callback(
                 )
                 confirmation.status = "done"
                 result_text = (
-                    f"✅ {customer.name} ka ledger clear kar diya. "
+                    f"✅ {customer_display_name(customer)} ka ledger clear kar diya. "
                     f"{entries_voided} entries aur {payments_voided} payments "
                     "audit ke liye rakhe gaye hain."
                 )
@@ -1239,7 +1502,7 @@ async def confirmation_callback(
                     exact = [
                         candidate
                         for candidate in matches
-                        if candidate.normalized_name
+                        if normalize_name(candidate.name)
                         == normalize_name(item["customer_name"])
                     ]
                     if exact:
@@ -1247,7 +1510,8 @@ async def confirmation_callback(
                     elif matches:
                         conflict = (
                             f"'{item['customer_name']}' ka milta-julta customer "
-                            f"'{matches[0].name}' ab khate mein hai. Koi balance "
+                            f"'{customer_display_name(matches[0])}' ab khate mein hai. "
+                            "Koi balance "
                             "save nahi hua; exact naam se dobara bhejiye."
                         )
                         break
@@ -1262,10 +1526,26 @@ async def confirmation_callback(
                 saved = []
                 for item, customer in resolved:
                     if customer is None:
+                        customer_name, separator, label = item[
+                            "customer_name"
+                        ].partition("|")
+                        customer_name = " ".join(customer_name.strip().split())
+                        customer_label = (
+                            " ".join(label.strip().split()) if separator else None
+                        )
+                        if separator and not customer_label:
+                            conflict = (
+                                f"'{item['customer_name']}' mein label khaali hai. "
+                                "Koi balance save nahi hua."
+                            )
+                            break
                         customer = Customer(
                             shop_id=shop_id,
-                            name=item["customer_name"],
-                            normalized_name=normalize_name(item["customer_name"]),
+                            name=customer_name,
+                            normalized_name=customer_normalized_key(
+                                customer_name, customer_label
+                            ),
+                            label=customer_label,
                         )
                         session.add(customer)
                         session.flush()
@@ -1279,28 +1559,33 @@ async def confirmation_callback(
                     )
                     saved.append(
                         {
-                            "customer_name": customer.name,
+                            "customer_name": customer_display_name(customer),
                             "customer_id": customer.id,
                             "amount_paise": item["amount_paise"],
                             "balance_paise": balance,
                         }
                     )
-                confirmation.status = "done"
-                audit(
-                    session,
-                    shop_id,
-                    telegram_user_id,
-                    "opening_balances_imported",
-                    {"balances": saved},
-                )
-                total = sum(item["amount_paise"] for item in saved)
-                result_lines = ["✅ Initial balances saved:"]
-                result_lines.extend(
-                    f"{item['customer_name']}: {format_paise(item['balance_paise'])}"
-                    for item in saved
-                )
-                result_lines.append(f"Total added: {format_paise(total)}")
-                result_text = "\n".join(result_lines)
+                if conflict:
+                    confirmation.status = "cancelled"
+                    result_text = conflict
+                else:
+                    confirmation.status = "done"
+                    audit(
+                        session,
+                        shop_id,
+                        telegram_user_id,
+                        "opening_balances_imported",
+                        {"balances": saved},
+                    )
+                    total = sum(item["amount_paise"] for item in saved)
+                    result_lines = ["✅ Initial balances saved:"]
+                    result_lines.extend(
+                        f"{item['customer_name']}: "
+                        f"{format_paise(item['balance_paise'])}"
+                        for item in saved
+                    )
+                    result_lines.append(f"Total added: {format_paise(total)}")
+                    result_text = "\n".join(result_lines)
         else:
             payload = confirmation.payload
             customer = None
@@ -1322,7 +1607,10 @@ async def confirmation_callback(
                 customer = Customer(
                     shop_id=shop_id,
                     name=payload["customer_name"],
-                    normalized_name=normalize_name(payload["customer_name"]),
+                    normalized_name=customer_normalized_key(
+                        payload["customer_name"], payload.get("customer_label")
+                    ),
+                    label=payload.get("customer_label"),
                 )
                 session.add(customer)
                 session.flush()
@@ -1330,6 +1618,9 @@ async def confirmation_callback(
                 confirmation.status = "cancelled"
                 result_text = "Customer nahi mila; kuch save nahi hua. Message dobara bhejiye."
             elif confirmation.kind == "entry":
+                starting_balance = customer_balance(
+                    session, shop_id, customer.id
+                )
                 balance = record_entry(
                     session,
                     shop_id,
@@ -1346,7 +1637,22 @@ async def confirmation_callback(
                     "entry_created",
                     {"confirmation_id": confirmation.id, "customer_id": customer.id},
                 )
-                result_text = f"✅ Saved. {customer.name} ka naya balance: {format_paise(balance)}"
+                item_lines = []
+                running_balance = starting_balance
+                for item in payload["items"]:
+                    running_balance += item["price_paise"]
+                    item_lines.append(
+                        f"{item['name']}"
+                        + (f" {item['quantity']}" if item.get("quantity") else "")
+                        + f" {format_paise(item['price_paise'])} "
+                        f"→ balance {format_paise(running_balance)}"
+                    )
+                result_text = (
+                    "✅ Saved:\n"
+                    + "\n".join(item_lines)
+                    + f"\n{customer_display_name(customer)} ka naya balance: "
+                    f"{format_paise(balance)}"
+                )
             elif confirmation.kind == "payment":
                 balance = record_payment(
                     session,
@@ -1364,7 +1670,13 @@ async def confirmation_callback(
                     "payment_created",
                     {"confirmation_id": confirmation.id, "customer_id": customer.id},
                 )
-                result_text = f"✅ Payment saved. {customer.name} ka naya balance: {format_paise(balance)}"
+                result_text = (
+                    f"✅ Payment received: {format_paise(payload['amount_paise'])}. "
+                    f"{customer_display_name(customer)} ka naya balance: "
+                    f"{format_paise(balance)}"
+                )
+                if payload.get("advance"):
+                    result_text += "\nYeh rakam customer ke advance mein hai."
             else:
                 confirmation.status = "cancelled"
                 result_text = "Is request ko save nahi kar sakte."
@@ -1388,7 +1700,7 @@ async def command_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     command = (message.text or "").split()[0].split("@")[0].lower()
     args = context.args
     parsed = ParsedMessage(intent="query", date=today_ist())
-    if command == "/all":
+    if command in {"/all", "/sabka_hisab"}:
         parsed.query_type = "all"
     elif command == "/today":
         parsed.query_type = "today"
@@ -1423,7 +1735,7 @@ async def unknown_command(
         context.application.bot_data["session_factory"], update.update_id
     ):
         return
-    await message.reply_text("Yeh command nahi samajh aaya. Madad ke liye /start bhejiye.")
+    await message.reply_text(HELP_REPLY)
 
 
 async def forget_command(

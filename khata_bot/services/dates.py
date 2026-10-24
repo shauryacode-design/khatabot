@@ -23,7 +23,9 @@ def parse_date(text: str, today: date | None = None) -> date | None:
     value = text.translate(_DEVANAGARI_DIGITS).strip().lower()
     if re.search(r"\b(aaj|today)\b", value):
         return current
-    if re.search(r"\b(kal|tomorrow)\b", value):
+    if re.search(r"\bkal\b", value):
+        return current - timedelta(days=1)
+    if re.search(r"\btomorrow\b", value):
         return current + timedelta(days=1)
     if re.search(r"\b(parso|day after tomorrow)\b", value):
         return current + timedelta(days=2)
