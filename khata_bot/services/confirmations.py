@@ -1,6 +1,6 @@
 """Durable, shop-scoped Save/Cancel confirmations."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, update
@@ -79,5 +79,11 @@ def claim_pending_confirmation(
     )
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def expired(confirmation: PendingConfirmation) -> bool:
-    return confirmation.expires_at <= utc_now_naive()
+    return _as_utc(confirmation.expires_at) <= datetime.now(timezone.utc)
