@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    BigInteger,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -44,7 +45,7 @@ class User(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    telegram_user_id: Mapped[int] = mapped_column(nullable=False, index=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     shop_id: Mapped[int] = mapped_column(
         ForeignKey("shops.id", ondelete="CASCADE"), nullable=False, index=True
     )
