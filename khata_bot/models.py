@@ -97,7 +97,7 @@ class Entry(Base):
     quantity_text: Mapped[str | None] = mapped_column(String(80))
     price_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -121,7 +121,7 @@ class Payment(Base):
     payment_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
     voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -156,7 +156,7 @@ class AuditLog(Base):
     shop_id: Mapped[int] = mapped_column(
         ForeignKey("shops.id", ondelete="CASCADE"), nullable=False
     )
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     action: Mapped[str] = mapped_column(String(40), nullable=False)
     details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
@@ -199,4 +199,4 @@ class Invite(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
