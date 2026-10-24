@@ -4,6 +4,9 @@ import asyncio
 import logging
 import re
 from datetime import datetime, time as datetime_time, timedelta
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 from telegram import Update
@@ -61,7 +64,22 @@ def _make_request() -> HTTPXRequest:
             "transport": httpx.AsyncHTTPTransport(local_address="0.0.0.0")
         },
     )
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
 
+    do_HEAD = do_GET
+
+    def log_message(self, *args):
+        pass
+
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
 
 async def error_handler(
     update: object, context: ContextTypes.DEFAULT_TYPE
@@ -215,6 +233,8 @@ def main() -> None:
         raise SystemExit(str(error)) from error
 
     application = build_application(settings)
+    start_health_server()
+    app.run_polling()
     application.run_polling()
 
 
